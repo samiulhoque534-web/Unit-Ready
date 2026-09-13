@@ -78,12 +78,26 @@ export interface SectionItem {
   createdAt: string;
 }
 
+export interface UserAuditLogEntry {
+  id: string;
+  armyNumber: string;
+  rank?: string;
+  name?: string;
+  userId?: string;
+  timestamp: string; // ISO Asia/Dhaka
+  actionType: 'REGISTRATION' | 'LOGIN' | 'LOGOUT' | 'FAILED_LOGIN' | 'APPROVAL' | 'REJECTION' | 'SUSPENSION' | 'DEACTIVATION' | 'REACTIVATION';
+  performedBy: string; // e.g. "CO", "System", "Admin"
+  details?: string;
+}
+
 export interface User {
   id: string;
-  serviceNumber: string;
+  serviceNumber: string; // Army Number / BA Number
+  armyNumberNormalized?: string; // Upper-case trimmed space-normalized
   rank?: string;
   fullName?: string;
-  appointmentTitle: string; // Used exclusively across the system
+  subUnitCompany?: string; // Company / Sub-unit
+  appointmentTitle: string; // Used across the system
   role: UserRole;
   sectionAssigned: SectionCode | 'all';
   canApprove?: boolean;
@@ -93,6 +107,11 @@ export interface User {
   failedLoginAttempts: number;
   lockoutUntil?: string | null;
   isActive: boolean;
+  accountStatus?: 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'DEACTIVATED';
+  registrationDate?: string;
+  lastActivityAt?: string;
+  identityVerified?: boolean;
+  verificationNotes?: string;
   userStatus?: 'ACTIVE' | 'TRANSFERRED' | 'DISBANDED' | 'INACTIVE' | 'DEACTIVATED' | 'REVOKED';
   loginCode?: string;
   lastLoginAt?: string;
@@ -399,25 +418,34 @@ export interface VehicleDailyState {
   updatedAt: string;
 }
 
+export type StockStatusType = 'AVAILABLE' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'SHORT_DATED' | 'EXPIRED' | 'QUARANTINED';
+
 export interface MedicineItem {
   id: string;
   genericName: string;
   brandName?: string;
   strength: string;
   dosageForm: string;
-  unitOfIssue: string;
+  unitOfIssue: string; // e.g. tablet, vial, ampoule, bottle, strip
+  batchNumber?: string;
   expiryDate: string; // Mandatory YYYY-MM-DD
   authorizedQuantity: number;
-  currentQuantity: number;
-  shortageOrExcess: number; // currentQuantity - authorizedQuantity
+  heldQuantity: number; // base held quantity
+  receivedQuantity: number; // total received
+  issuedQuantity: number; // total issued
+  balanceQuantity: number; // Held + Received - Issued (never < 0)
+  currentQuantity: number; // maps to balanceQuantity for backward compatibility
+  shortageOrExcess: number; // balanceQuantity - authorizedQuantity
   minimumLevel: number;
   maximumLevel: number;
   unitPrice: number;
   storageCondition: string;
   isHighRiskLasa: boolean;
   dailyConsumptionAverage: number;
+  stockStatus?: StockStatusType;
   remarks?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface MedicineBatch {
@@ -439,23 +467,34 @@ export interface MedicineBatch {
 
 export interface MedicineTransaction {
   id: string;
+  issueId?: string; // e.g. ISS-95FA-YYYYMMDD-XXXX
   transactionType: 'RECEIVE' | 'ISSUE' | 'RETURN' | 'TRANSFER_PROPOSAL' | 'QUARANTINE_MOVE' | 'REVERSAL_ENTRY' | 'CORRECTING_ENTRY' | 'STOCK_ADJUSTMENT';
   medicineId: string;
   medicineName: string;
+  strengthDosage?: string;
   batchId: string;
   batchNumber: string;
+  expiryDate?: string;
   quantity: number;
+  unit?: string;
   unitPrice: number;
   totalValue: number;
   voucherReference: string;
   linkedOriginalTransactionId?: string;
   issuedToRecipient?: string;
+  placeLocation?: string; // location/department where issued
+  issuedByName?: string;
   secondVerifierUserId?: string;
   performedByUserId: string;
   performedByAppointment: string;
   deviceId: string;
   transactionTimestamp: string;
+  issueDate?: string; // YYYY-MM-DD
   remarks: string;
+  isReversed?: boolean;
+  reversedAt?: string;
+  reversedBy?: string;
+  reversalReason?: string;
 }
 
 export interface MedicalInstrumentItem {
@@ -518,6 +557,18 @@ export interface MonthlyMedicalAuditItem {
   remarks?: string;
 }
 
+export interface AuditSignatureBlock {
+  appointment: 'Med NCO' | 'MOIC' | 'CO';
+  signerName?: string;
+  signerRank?: string;
+  signerUserId?: string;
+  signatureData?: string;
+  signedAtDate?: string; // YYYY-MM-DD
+  signedAtTime?: string; // HH:mm:ss
+  status: 'PENDING' | 'SIGNED';
+  version: string;
+}
+
 export interface MonthlyMedicalAuditReport {
   id: string;
   auditMonth: string; // YYYY-MM
@@ -539,6 +590,23 @@ export interface MonthlyMedicalAuditReport {
   coDecision?: string;
   coRemarks?: string;
   coDecidedAt?: string;
+  // 3-Stage Signature Blocks
+  medNcoSignature?: AuditSignatureBlock;
+  moicSignature?: AuditSignatureBlock;
+  coSignature?: AuditSignatureBlock;
+  auditVersion?: string; // e.g. "v1.0", "v1.1 (Revised)"
+  isRevised?: boolean;
+  revisionHistory?: Array<{
+    revisedAt: string;
+    revisedBy: string;
+    previousVersion: string;
+    signaturesArchived: {
+      medNco?: AuditSignatureBlock;
+      moic?: AuditSignatureBlock;
+      co?: AuditSignatureBlock;
+    };
+    reason?: string;
+  }>;
   lockedAt?: string;
   createdAt: string;
   updatedAt: string;

@@ -23,7 +23,8 @@ import {
   AuditLogEntry,
   InAppNotification,
   SystemBackupRecord,
-  RankTradeDistributionItem
+  RankTradeDistributionItem,
+  UserAuditLogEntry
 } from '../types';
 import {
   initialUsers,
@@ -78,12 +79,13 @@ export class UnitReadyDatabase extends Dexie {
   trainingMaterials!: Table<any, string>;
   deactivationRequests!: Table<any, string>;
   dailySnapshots!: Table<any, string>;
+  userAuditLogs!: Table<UserAuditLogEntry, string>;
 
   constructor() {
     super('UnitReady360_95FA_DB');
 
-    this.version(5).stores({
-      users: 'id, serviceNumber, appointmentTitle, role, sectionAssigned, userStatus',
+    this.version(6).stores({
+      users: 'id, serviceNumber, armyNumberNormalized, appointmentTitle, role, sectionAssigned, userStatus, accountStatus',
       devices: 'id, deviceIdentifier, deviceName, status, assignedSectionCode, sixDigitPin',
       ranks: 'id, rankName, rankOrder, isActive',
       sections: 'id, sectionCode, sectionName, designatedOperatorRole',
@@ -97,7 +99,7 @@ export class UnitReadyDatabase extends Dexie {
       vehicleFleetItems: 'id, registrationFleetRef, vehicleType, status',
       medicines: 'id, genericName, strength, dosageForm, expiryDate',
       medicineBatches: 'id, medicineId, batchNumber, expiryDate, status',
-      medicineTransactions: 'id, transactionType, medicineId, batchId, transactionTimestamp',
+      medicineTransactions: 'id, issueId, transactionType, medicineId, batchNumber, issueDate, placeLocation, transactionTimestamp',
       medicalInstruments: 'id, instrumentSetName, category, location',
       medicalEquipment: 'id, equipmentName, category, serialNumber, currentStatus',
       monthlyMedicalAudits: 'id, auditMonth, auditDate, status',
@@ -109,7 +111,8 @@ export class UnitReadyDatabase extends Dexie {
       backups: 'id, backupReference, createdAt',
       trainingMaterials: 'id, category, uploadDate, status, isPublished, isArchived, isEmergencyQuickRef',
       deactivationRequests: 'id, targetUserId, status, recommendedAt',
-      dailySnapshots: 'id, snapshotDate, snapshotStatus'
+      dailySnapshots: 'id, snapshotDate, snapshotStatus',
+      userAuditLogs: 'id, armyNumber, actionType, timestamp, performedBy'
     });
   }
 }

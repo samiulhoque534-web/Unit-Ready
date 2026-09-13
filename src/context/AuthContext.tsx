@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { User, Device, UserRole } from '../types';
+import { User, Device, UserRole, UserAuditLogEntry, ManpowerPersonnel } from '../types';
 import { initialUsers, initialDevices } from '../db/seedData';
 import { db } from '../db/database';
 import { logAuditEvent } from '../services/auditService';
@@ -14,6 +14,7 @@ export interface RoleConfig {
 
 interface AuthContextType {
   currentUser: User;
+  user: User;
   activeDevice: Device;
   isDeviceAuthorized: boolean;
   isLoggedIn: boolean;
@@ -22,6 +23,17 @@ interface AuthContextType {
     loginCode: string,
     operatorDetails?: { appointmentTitle?: string; fullName?: string; rank?: string; serviceNumber?: string }
   ) => Promise<{ success: boolean; message: string }>;
+  loginGeneralUser: (
+    armyNumber: string,
+    pin: string
+  ) => Promise<{ success: boolean; message: string }>;
+  registerGeneralUser: (data: {
+    armyNumber: string;
+    rank: string;
+    fullName: string;
+    subUnitCompany: string;
+    pin: string;
+  }) => Promise<{ success: boolean; message: string; user?: User }>;
   loginAsGeneralViewer: () => Promise<{ success: boolean; message: string }>;
   logout: () => void;
   activateDeviceWithPin: (pin: string) => Promise<{ success: boolean; message: string }>;
@@ -37,8 +49,9 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const savedUserRole = (localStorage.getItem('95fa_user_role') as UserRole) || 'co';
   const savedIsLoggedIn = localStorage.getItem('95fa_is_logged_in') === 'true';
+  const savedUserId = localStorage.getItem('95fa_user_id');
 
-  // 5 Official Authorized Roles (Strictly filtered, no GD / SMT Auditor / System Administrator)
+  // 5 Official Authorized Roles
   const availableRoles: RoleConfig[] = [
     { role: 'co', label: 'Commanding Officer (CO)', appointment: 'Commanding Officer (CO)', concernedModule: 'All Sections (Final Command Authority & User Access Control)' },
     { role: '2ic', label: 'Second-in-Command (2IC)', appointment: 'Second-in-Command (2IC)', concernedModule: 'All Sections (Verification & Executive Oversight)' },
@@ -67,6 +80,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     const syncUser = async () => {
+      if (savedUserId) {
+        const found = await db.users.get(savedUserId);
+        if (found) {
+          setCurrentUser(found);
+          return;
+        }
+      }
       if (savedUserRole) {
         const dbUser = await db.users.where('role').equals(savedUserRole).first();
         if (dbUser) {
@@ -75,10 +95,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     };
     syncUser();
-  }, [savedUserRole]);
+  }, [savedUserRole, savedUserId]);
 
   /**
-   * Secure Individual Login with Unique Generated Access Code
+   * Secure Individual Login with Unique Generated Access Code (CO, 2IC, MOIC, QM, Operators)
    */
   const loginWithIndividualCode = async (
     role: UserRole,
@@ -91,7 +111,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const cleanCode = (loginCode || '').trim();
     if (!cleanCode) {
-      return { success: false, message: 'Please enter your individual 6-digit access code.' };
+      return { success: false, message: 'Please enter your individual access code.' };
     }
 
     const searchRole = role === 'other_operator' ? 'other_operator' : role;
@@ -121,7 +141,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsLoggedIn(true);
       setIsDeviceAuthorized(true);
       localStorage.setItem('95fa_user_role', user.role);
+      localStorage.setItem('95fa_user_id', user.id);
       localStorage.setItem('95fa_is_logged_in', 'true');
+
+      // Log in userAuditLogs
+      if (db.userAuditLogs) {
+        await db.userAuditLogs.add({
+          id: `LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          armyNumber: user.serviceNumber,
+          rank: user.rank,
+          name: user.fullName,
+          userId: user.id,
+          timestamp: new Date().toISOString(),
+          actionType: 'LOGIN',
+          performedBy: 'User',
+          details: `Command/Operator login verified for ${user.appointmentTitle}.`
+        });
+      }
 
       await logAuditEvent(
         user,
@@ -144,10 +180,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     ) || initialUsers.find(u => (u.loginCode === cleanCode || u.pin === cleanCode));
 
     if (localUser) {
-      if (localUser.isActive === false || localUser.userStatus === 'DEACTIVATED') {
+      if (localUser.isActive === false || localUser.userStatus === 'DEACTIVATED' || localUser.accountStatus === 'DEACTIVATED') {
         return {
           success: false,
           message: 'Account deactivated. Access denied. Contact Commanding Officer for reactivation.'
+        };
+      }
+      if (localUser.accountStatus === 'SUSPENDED') {
+        return {
+          success: false,
+          message: 'Account suspended by Commanding Officer. Access denied.'
         };
       }
 
@@ -164,7 +206,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsLoggedIn(true);
       setIsDeviceAuthorized(true);
       localStorage.setItem('95fa_user_role', activeUser.role);
+      localStorage.setItem('95fa_user_id', activeUser.id);
       localStorage.setItem('95fa_is_logged_in', 'true');
+
+      if (db.userAuditLogs) {
+        await db.userAuditLogs.add({
+          id: `LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          armyNumber: activeUser.serviceNumber,
+          rank: activeUser.rank,
+          name: activeUser.fullName,
+          userId: activeUser.id,
+          timestamp: new Date().toISOString(),
+          actionType: 'LOGIN',
+          performedBy: 'User',
+          details: `Local seed login for ${activeUser.appointmentTitle}.`
+        });
+      }
 
       await logAuditEvent(
         activeUser,
@@ -180,6 +237,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
     }
 
+    if (db.userAuditLogs) {
+      await db.userAuditLogs.add({
+        id: `LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        armyNumber: operatorDetails?.serviceNumber || 'UNKNOWN',
+        rank: operatorDetails?.rank,
+        name: operatorDetails?.fullName,
+        timestamp: new Date().toISOString(),
+        actionType: 'FAILED_LOGIN',
+        performedBy: 'System',
+        details: `Invalid access code attempt for role ${role}.`
+      });
+    }
+
     await logAuditEvent(
       currentUser,
       'LOGIN_FAILED',
@@ -190,12 +260,247 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     return {
       success: false,
-      message: authResult.message || 'Invalid access code. Please check your individual 6-digit code.'
+      message: authResult.message || 'Invalid access code. Please check your individual access code.'
     };
   };
 
   /**
-   * 1-Click Transparent General Viewer Access (Read-Only)
+   * Individual General User Registration with Cross-Check against manpowerPersonnel
+   */
+  const registerGeneralUser = async (data: {
+    armyNumber: string;
+    rank: string;
+    fullName: string;
+    subUnitCompany: string;
+    pin: string;
+  }): Promise<{ success: boolean; message: string; user?: User }> => {
+    const rawArmy = (data.armyNumber || '').trim();
+    if (!rawArmy) {
+      return { success: false, message: 'Army Number is mandatory.' };
+    }
+    const cleanPin = (data.pin || '').trim();
+    if (!cleanPin || cleanPin.length < 4) {
+      return { success: false, message: 'Please set a secure PIN (at least 4 digits).' };
+    }
+
+    const normalizedArmy = rawArmy.replace(/\s+/g, '').toUpperCase();
+
+    // 1. Duplicate Prevention (case-insensitive, space-insensitive)
+    const allUsers = await db.users.toArray();
+    const duplicate = allUsers.find(u => {
+      const uNorm = (u.armyNumberNormalized || u.serviceNumber || '').replace(/\s+/g, '').toUpperCase();
+      return uNorm === normalizedArmy;
+    });
+
+    if (duplicate) {
+      return {
+        success: false,
+        message: `An account for Army Number "${rawArmy}" already exists. Please login or contact Commanding Officer.`
+      };
+    }
+
+    // 2. Cross-check against Manpower Personnel Database
+    const personnel = await db.manpowerPersonnel.toArray();
+    const matchedPersonnel = personnel.find(p => {
+      const pNorm = (p.baNo || p.personalNumber || '').replace(/\s+/g, '').toUpperCase();
+      return pNorm === normalizedArmy;
+    });
+
+    const isVerified = Boolean(matchedPersonnel);
+    const resolvedRank = data.rank || matchedPersonnel?.rank || 'Personnel';
+    const resolvedName = data.fullName || matchedPersonnel?.name || 'Unit Soldier';
+
+    // Set accountStatus: Verified accounts can be active or pending CO review.
+    // If verified against unit roll -> ACTIVE; If not found in roll -> PENDING CO approval.
+    const accountStatus: 'ACTIVE' | 'PENDING' = isVerified ? 'ACTIVE' : 'PENDING';
+    const verificationNotes = isVerified
+      ? `Verified match against unit manpower roll (${matchedPersonnel?.trade || 'Personnel'}, Appt: ${matchedPersonnel?.appointment || 'N/A'})`
+      : 'Unmatched in manpower database. Held for CO verification.';
+
+    const nowIso = new Date().toISOString();
+    const newUser: User = {
+      id: `usr-gen-${Date.now()}`,
+      serviceNumber: rawArmy,
+      armyNumberNormalized: normalizedArmy,
+      rank: resolvedRank,
+      fullName: resolvedName,
+      subUnitCompany: data.subUnitCompany || 'HQ Company',
+      appointmentTitle: `${resolvedRank} ${resolvedName}`,
+      role: 'general_personnel',
+      sectionAssigned: 'all',
+      accountStatus: accountStatus,
+      registrationDate: nowIso,
+      identityVerified: isVerified,
+      verificationNotes: verificationNotes,
+      failedLoginAttempts: 0,
+      isActive: accountStatus === 'ACTIVE',
+      userStatus: accountStatus === 'ACTIVE' ? 'ACTIVE' : 'DEACTIVATED',
+      loginCode: cleanPin,
+      pin: cleanPin,
+      lastLoginAt: 'Never logged in'
+    };
+
+    await db.users.add(newUser);
+    await syncEntityToCloud('users', newUser.id, newUser);
+
+    // Record in userAuditLogs
+    if (db.userAuditLogs) {
+      await db.userAuditLogs.add({
+        id: `LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        armyNumber: rawArmy,
+        rank: resolvedRank,
+        name: resolvedName,
+        userId: newUser.id,
+        timestamp: nowIso,
+        actionType: 'REGISTRATION',
+        performedBy: 'User',
+        details: `General user self-registration. Database match: ${isVerified ? 'YES' : 'NO'}. Status: ${accountStatus}. Notes: ${verificationNotes}`
+      });
+    }
+
+    await logAuditEvent(
+      newUser,
+      'DEVICE_REGISTERED',
+      'auth',
+      newUser.appointmentTitle,
+      `General user registration for ${rawArmy} (${resolvedRank} ${resolvedName}). Status: ${accountStatus}.`
+    );
+
+    return {
+      success: true,
+      user: newUser,
+      message: isVerified
+        ? `Account registered and verified against unit roll. You can now login.`
+        : `Account created. Because your Army Number was not found in the active unit roll, your account is PENDING approval by the Commanding Officer.`
+    };
+  };
+
+  /**
+   * Individual General User Login with Army Number & PIN
+   */
+  const loginGeneralUser = async (
+    armyNumber: string,
+    pin: string
+  ): Promise<{ success: boolean; message: string }> => {
+    const rawArmy = (armyNumber || '').trim();
+    const cleanPin = (pin || '').trim();
+
+    if (!rawArmy || !cleanPin) {
+      return { success: false, message: 'Please enter both Army Number and PIN.' };
+    }
+
+    const normalizedArmy = rawArmy.replace(/\s+/g, '').toUpperCase();
+    const allUsers = await db.users.toArray();
+    const user = allUsers.find(u => {
+      const uNorm = (u.armyNumberNormalized || u.serviceNumber || '').replace(/\s+/g, '').toUpperCase();
+      return uNorm === normalizedArmy;
+    });
+
+    if (!user) {
+      if (db.userAuditLogs) {
+        await db.userAuditLogs.add({
+          id: `LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          armyNumber: rawArmy,
+          timestamp: new Date().toISOString(),
+          actionType: 'FAILED_LOGIN',
+          performedBy: 'System',
+          details: `Login attempt failed: Army Number ${rawArmy} not registered.`
+        });
+      }
+      return { success: false, message: `Army Number "${rawArmy}" is not registered. Please register first.` };
+    }
+
+    // Verify PIN
+    const isValidPin = user.pin === cleanPin || user.loginCode === cleanPin;
+    if (!isValidPin) {
+      if (db.userAuditLogs) {
+        await db.userAuditLogs.add({
+          id: `LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          armyNumber: user.serviceNumber,
+          rank: user.rank,
+          name: user.fullName,
+          userId: user.id,
+          timestamp: new Date().toISOString(),
+          actionType: 'FAILED_LOGIN',
+          performedBy: 'System',
+          details: 'Incorrect PIN entered.'
+        });
+      }
+      return { success: false, message: 'Invalid PIN entered. Please check your credentials.' };
+    }
+
+    // Check Account Status
+    if (user.accountStatus === 'PENDING') {
+      return {
+        success: false,
+        message: 'Your account is PENDING approval by the Commanding Officer. Access will be granted once verified by the CO.'
+      };
+    }
+
+    if (user.accountStatus === 'SUSPENDED') {
+      return {
+        success: false,
+        message: 'Your account is currently SUSPENDED by the Commanding Officer. Access denied.'
+      };
+    }
+
+    if (user.accountStatus === 'DEACTIVATED' || user.isActive === false) {
+      return {
+        success: false,
+        message: 'Your account has been DEACTIVATED. Contact the Commanding Officer for reactivation.'
+      };
+    }
+
+    // Successful Login
+    const nowIso = new Date().toISOString();
+    await db.users.update(user.id, {
+      lastLoginAt: nowIso,
+      lastActivityAt: nowIso
+    });
+
+    const activeUser: User = {
+      ...user,
+      lastLoginAt: nowIso,
+      lastActivityAt: nowIso
+    };
+
+    setCurrentUser(activeUser);
+    setIsLoggedIn(true);
+    setIsDeviceAuthorized(true);
+    localStorage.setItem('95fa_user_role', activeUser.role);
+    localStorage.setItem('95fa_user_id', activeUser.id);
+    localStorage.setItem('95fa_is_logged_in', 'true');
+
+    if (db.userAuditLogs) {
+      await db.userAuditLogs.add({
+        id: `LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        armyNumber: user.serviceNumber,
+        rank: user.rank,
+        name: user.fullName,
+        userId: user.id,
+        timestamp: nowIso,
+        actionType: 'LOGIN',
+        performedBy: 'User',
+        details: `General user authenticated successfully: ${user.serviceNumber} (${user.rank || ''} ${user.fullName})`
+      });
+    }
+
+    await logAuditEvent(
+      activeUser,
+      'LOGIN_SUCCESS',
+      'auth',
+      activeUser.appointmentTitle,
+      `General User logged in: ${activeUser.serviceNumber} (${activeUser.fullName}).`
+    );
+
+    return {
+      success: true,
+      message: `Welcome, ${activeUser.rank ? activeUser.rank + ' ' : ''}${activeUser.fullName}. Login verified.`
+    };
+  };
+
+  /**
+   * Fallback General Viewer Access
    */
   const loginAsGeneralViewer = async (): Promise<{ success: boolean; message: string }> => {
     const viewerUser: User = {
@@ -233,9 +538,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = () => {
+    const nowIso = new Date().toISOString();
+    if (db.userAuditLogs && currentUser.serviceNumber) {
+      db.userAuditLogs.add({
+        id: `LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        armyNumber: currentUser.serviceNumber,
+        rank: currentUser.rank,
+        name: currentUser.fullName,
+        userId: currentUser.id,
+        timestamp: nowIso,
+        actionType: 'LOGOUT',
+        performedBy: 'User',
+        details: `User signed out: ${currentUser.appointmentTitle}.`
+      }).catch(console.error);
+    }
+
     logAuditEvent(currentUser, 'LOGOUT', 'auth', currentUser.appointmentTitle, `${currentUser.appointmentTitle} signed out.`);
     setIsLoggedIn(false);
     localStorage.removeItem('95fa_is_logged_in');
+    localStorage.removeItem('95fa_user_id');
   };
 
   const activateDeviceWithPin = async (pin: string): Promise<{ success: boolean; message: string }> => {
@@ -243,15 +564,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { success: true, message: 'Device activated successfully.' };
   };
 
-  /**
-   * CO Access-Code Management Actions
-   */
   const createPersonnelAccount = async (userData: Partial<User>): Promise<{ success: boolean; user?: User; message: string }> => {
     if (currentUser.role !== 'co' && currentUser.role !== 'admin') {
       return { success: false, message: 'Commanding Officer (CO) authorization required.' };
     }
 
-    // Generate unique 6-digit access code
     const existingUsers = await db.users.toArray();
     let uniqueCode = Math.floor(100000 + Math.random() * 900000).toString();
     while (existingUsers.some(u => u.loginCode === uniqueCode || u.pin === uniqueCode)) {
@@ -269,6 +586,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       failedLoginAttempts: 0,
       isActive: true,
       userStatus: 'ACTIVE',
+      accountStatus: 'ACTIVE',
       loginCode: uniqueCode,
       pin: uniqueCode,
       lastLoginAt: 'Never logged in'
@@ -349,6 +667,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ...user,
       isActive: isActivating,
       userStatus: isActivating ? ('ACTIVE' as const) : ('DEACTIVATED' as const),
+      accountStatus: isActivating ? ('ACTIVE' as const) : ('DEACTIVATED' as const),
       deactivatedAt: isActivating ? undefined : new Date().toISOString(),
       deactivatedBy: isActivating ? undefined : currentUser.appointmentTitle,
       lastEditedBy: currentUser.appointmentTitle,
@@ -376,10 +695,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <AuthContext.Provider
       value={{
         currentUser,
+        user: currentUser,
         activeDevice,
         isDeviceAuthorized,
         isLoggedIn,
         loginWithIndividualCode,
+        loginGeneralUser,
+        registerGeneralUser,
         loginAsGeneralViewer,
         logout,
         activateDeviceWithPin,

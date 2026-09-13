@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { db } from '../../db/database';
-import { MonthlyMedicalAuditReport, MonthlyMedicalAuditItem } from '../../types';
+import { MonthlyMedicalAuditReport, MonthlyMedicalAuditItem, AuditSignatureBlock } from '../../types';
 import { Modal } from '../common/Modal';
 import { StatusBadge } from '../common/StatusBadge';
 import { RequestCorrectionModal } from '../common/RequestCorrectionModal';
@@ -13,7 +13,8 @@ import autoTable from 'jspdf-autotable';
 import { 
   ClipboardCheck, Plus, Calendar, Download, 
   Printer, Send, CheckCircle2, AlertTriangle, 
-  Eye, Edit3, Lock, RefreshCw, FileText 
+  Eye, Edit3, Lock, RefreshCw, FileText, Check,
+  ShieldCheck, AlertCircle, Clock, RotateCcw
 } from 'lucide-react';
 
 export const MonthlyMedicalAuditSubModule: React.FC = () => {
@@ -36,8 +37,8 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthYear);
   const [auditItems, setAuditItems] = useState<MonthlyMedicalAuditItem[]>([]);
 
-  // Editing state for active draft audit
-  const [editingAudit, setEditingAudit] = useState<MonthlyMedicalAuditReport | null>(null);
+  // Remarks / notes for sign-off
+  const [signatureRemarks, setSignatureRemarks] = useState<string>('');
 
   const loadAudits = async () => {
     const list = await db.monthlyMedicalAudits.toArray();
@@ -60,17 +61,18 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
     // 1. Medicines
     meds.forEach(m => {
       const b = batches.find(batch => batch.medicineId === m.id);
+      const bal = Math.max(0, (Number(m.heldQuantity) || Number(m.currentQuantity) || 0) + (Number(m.receivedQuantity) || 0) - (Number(m.issuedQuantity) || 0));
       items.push({
         id: 'aud-med-' + m.id,
         itemType: 'MEDICINE',
         name: m.genericName + (m.brandName ? ` (${m.brandName})` : ''),
         specOrModel: m.strength + ' ' + m.dosageForm,
-        batchOrSerial: b ? b.batchNumber : 'N/A',
+        batchOrSerial: b ? b.batchNumber : (m.batchNumber || 'N/A'),
         expiryDate: m.expiryDate,
         expiryCategory: b ? b.status : undefined,
         authorizedQty: m.authorizedQuantity || 0,
-        systemQty: m.currentQuantity || 0,
-        physicalQty: m.currentQuantity || 0,
+        systemQty: bal,
+        physicalQty: bal,
         variance: 0,
         remarks: 'Physical stock matched'
       });
@@ -147,6 +149,23 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
       totalVariancesDetected: totalVariances,
       status: 'DRAFT',
       preparedByAppointment: currentUser.appointmentTitle,
+      auditVersion: 'v1.0',
+      isRevised: false,
+      medNcoSignature: {
+        appointment: 'Med NCO',
+        status: 'PENDING',
+        version: 'v1.0'
+      },
+      moicSignature: {
+        appointment: 'MOIC',
+        status: 'PENDING',
+        version: 'v1.0'
+      },
+      coSignature: {
+        appointment: 'CO',
+        status: 'PENDING',
+        version: 'v1.0'
+      },
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -165,116 +184,406 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
     alert('Consolidated Monthly Medical Audit saved as Draft.');
   };
 
-  const handleSubmitToMoic = async (audit: MonthlyMedicalAuditReport) => {
-    const nowIso = new Date().toISOString();
-    await db.monthlyMedicalAudits.update(audit.id, {
-      status: 'PENDING_MOIC',
-      submittedAt: nowIso,
-      updatedAt: nowIso
-    });
+  // STEP 1: Med NCO Signs and Submits
+  const handleMedNcoSignAndSubmit = async (audit: MonthlyMedicalAuditReport) => {
+    const now = new Date();
+    const dateStr = now.toISOString().substring(0, 10);
+    const timeStr = now.toTimeString().substring(0, 8);
 
+    const medNcoSig: AuditSignatureBlock = {
+      appointment: 'Med NCO',
+      signerName: currentUser.fullName || currentUser.appointmentTitle,
+      signerRank: currentUser.rank || 'NCO',
+      signerUserId: currentUser.id,
+      signatureData: `DIGITALLY-SIGNED-MED-NCO-${currentUser.serviceNumber || currentUser.id}-${Date.now()}`,
+      signedAtDate: dateStr,
+      signedAtTime: timeStr,
+      status: 'SIGNED',
+      version: audit.auditVersion || 'v1.0'
+    };
+
+    const updated: MonthlyMedicalAuditReport = {
+      ...audit,
+      status: 'PENDING_MOIC',
+      submittedAt: now.toISOString(),
+      medNcoSignature: medNcoSig,
+      updatedAt: now.toISOString()
+    };
+
+    await db.monthlyMedicalAudits.put(updated);
     await logAuditEvent(
       currentUser,
-      'MONTHLY_AUDIT_SUBMITTED',
+      'RECORD_SUBMITTED',
       'med_store_medicine',
       audit.reportReference,
-      `Submitted Monthly Medical Audit for ${audit.auditMonth} to MOIC for clinical & stock verification.`
+      `Med NCO signed and submitted Monthly Medical Audit for ${audit.auditMonth}. Forwarded to MOIC.`
     );
 
-    loadAudits();
-    alert('Monthly Medical Audit submitted to MOIC.');
+    await loadAudits();
+    if (selectedAudit?.id === audit.id) {
+      setSelectedAudit(updated);
+    }
+    alert('Med NCO Signature applied successfully. Forwarded to MOIC for Step 2 Review.');
   };
 
-  const handleMoicApprove = async (audit: MonthlyMedicalAuditReport) => {
-    const nowIso = new Date().toISOString();
-    await db.monthlyMedicalAudits.update(audit.id, {
+  // STEP 2: MOIC Reviews and Signs
+  const handleMoicSignAndForward = async (audit: MonthlyMedicalAuditReport) => {
+    if (!audit.medNcoSignature || audit.medNcoSignature.status !== 'SIGNED') {
+      alert('CANNOT SIGN: Step 1 (Med NCO Signature) must be completed before MOIC verification.');
+      return;
+    }
+
+    const now = new Date();
+    const dateStr = now.toISOString().substring(0, 10);
+    const timeStr = now.toTimeString().substring(0, 8);
+
+    const moicSig: AuditSignatureBlock = {
+      appointment: 'MOIC',
+      signerName: currentUser.fullName || currentUser.appointmentTitle,
+      signerRank: currentUser.rank || 'Captain / Major',
+      signerUserId: currentUser.id,
+      signatureData: `DIGITALLY-SIGNED-MOIC-${currentUser.serviceNumber || currentUser.id}-${Date.now()}`,
+      signedAtDate: dateStr,
+      signedAtTime: timeStr,
+      status: 'SIGNED',
+      version: audit.auditVersion || 'v1.0'
+    };
+
+    const updated: MonthlyMedicalAuditReport = {
+      ...audit,
       status: 'MOIC_APPROVED',
       moicAppointment: currentUser.appointmentTitle,
       moicDecision: 'APPROVED',
-      moicRemarks: 'Verified all physical stock counts, variances, and expiry statuses.',
-      moicDecidedAt: nowIso,
-      updatedAt: nowIso
-    });
+      moicRemarks: signatureRemarks || 'Verified physical stock counts, variances, and expiry statuses.',
+      moicDecidedAt: now.toISOString(),
+      moicSignature: moicSig,
+      updatedAt: now.toISOString()
+    };
 
+    await db.monthlyMedicalAudits.put(updated);
     await logAuditEvent(
       currentUser,
       'MOIC_APPROVED',
       'med_store_medicine',
       audit.reportReference,
-      `MOIC approved Monthly Medical Audit for ${audit.auditMonth}. Forwarded to CO for final approval.`
+      `MOIC approved and signed Monthly Medical Audit for ${audit.auditMonth}. Forwarded to Commanding Officer for final command approval.`
     );
 
-    loadAudits();
-    alert('Approved by MOIC. Forwarded to Commanding Officer for final approval.');
+    setSignatureRemarks('');
+    await loadAudits();
+    if (selectedAudit?.id === audit.id) {
+      setSelectedAudit(updated);
+    }
+    alert('MOIC Verification and Signature applied. Forwarded to Commanding Officer for Step 3 Final Approval.');
   };
 
-  const handleCoFinalApprove = async (audit: MonthlyMedicalAuditReport) => {
-    const nowIso = new Date().toISOString();
-    await db.monthlyMedicalAudits.update(audit.id, {
+  // STEP 3: CO Final Review, Signs and Locks
+  const handleCoSignAndFinalApprove = async (audit: MonthlyMedicalAuditReport) => {
+    if (!audit.medNcoSignature || audit.medNcoSignature.status !== 'SIGNED') {
+      alert('CANNOT APPROVE: Med NCO signature is missing.');
+      return;
+    }
+    if (!audit.moicSignature || audit.moicSignature.status !== 'SIGNED') {
+      alert('CANNOT APPROVE: Step 2 (MOIC Signature) must be completed before CO Final Approval.');
+      return;
+    }
+
+    const now = new Date();
+    const dateStr = now.toISOString().substring(0, 10);
+    const timeStr = now.toTimeString().substring(0, 8);
+
+    const coSig: AuditSignatureBlock = {
+      appointment: 'CO',
+      signerName: currentUser.fullName || 'Commanding Officer',
+      signerRank: currentUser.rank || 'Lt Col',
+      signerUserId: currentUser.id,
+      signatureData: `DIGITALLY-SIGNED-CO-${currentUser.serviceNumber || currentUser.id}-${Date.now()}`,
+      signedAtDate: dateStr,
+      signedAtTime: timeStr,
+      status: 'SIGNED',
+      version: audit.auditVersion || 'v1.0'
+    };
+
+    const updated: MonthlyMedicalAuditReport = {
+      ...audit,
       status: 'CO_APPROVED',
       coAppointment: currentUser.appointmentTitle,
       coDecision: 'FINAL_APPROVED',
-      coRemarks: 'Commanding Officer final approval granted. Register locked.',
-      coDecidedAt: nowIso,
-      lockedAt: nowIso,
-      updatedAt: nowIso
-    });
+      coRemarks: signatureRemarks || 'Commanding Officer final command approval granted. Official record authenticated & locked.',
+      coDecidedAt: now.toISOString(),
+      coSignature: coSig,
+      lockedAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    };
 
+    await db.monthlyMedicalAudits.put(updated);
     await logAuditEvent(
       currentUser,
-      'MONTHLY_AUDIT_APPROVED',
+      'CO_APPROVED',
       'med_store_medicine',
       audit.reportReference,
-      `Commanding Officer approved and locked Monthly Medical Stock-Taking Audit for ${audit.auditMonth}.`
+      `Commanding Officer approved, signed, and locked Monthly Medical Audit for ${audit.auditMonth}.`
     );
 
-    loadAudits();
-    alert('FINAL APPROVAL GRANTED: Monthly Medical Audit is now officially approved and locked.');
+    setSignatureRemarks('');
+    await loadAudits();
+    if (selectedAudit?.id === audit.id) {
+      setSelectedAudit(updated);
+    }
+    alert('FINAL COMMAND APPROVAL GRANTED: All 3 signature blocks completed. Audit report is locked.');
   };
 
+  // Invalidate signatures if audit is revised
+  const handleTriggerRevision = async (audit: MonthlyMedicalAuditReport) => {
+    const confirmRev = window.confirm(
+      'WARNING: Modifying or revising this audit form will INVALIDATE all existing signatures (Med NCO, MOIC, CO) and return the audit to DRAFT status for re-signing from Step 1.\n\nDo you wish to proceed with revision?'
+    );
+    if (!confirmRev) return;
+
+    const currentVer = audit.auditVersion || 'v1.0';
+    const nextVerNum = (parseFloat(currentVer.replace('v', '')) + 0.1).toFixed(1);
+    const newVer = `v${nextVerNum} (Revised)`;
+
+    const historyEntry = {
+      revisedAt: new Date().toISOString(),
+      revisedBy: currentUser.appointmentTitle,
+      previousVersion: currentVer,
+      signaturesArchived: {
+        medNco: audit.medNcoSignature,
+        moic: audit.moicSignature,
+        co: audit.coSignature
+      },
+      reason: 'Audit data modified after initial signature.'
+    };
+
+    const updated: MonthlyMedicalAuditReport = {
+      ...audit,
+      status: 'DRAFT',
+      auditVersion: newVer,
+      isRevised: true,
+      revisionHistory: [...(audit.revisionHistory || []), historyEntry],
+      medNcoSignature: {
+        appointment: 'Med NCO',
+        status: 'PENDING',
+        version: newVer
+      },
+      moicSignature: {
+        appointment: 'MOIC',
+        status: 'PENDING',
+        version: newVer
+      },
+      coSignature: {
+        appointment: 'CO',
+        status: 'PENDING',
+        version: newVer
+      },
+      lockedAt: undefined,
+      updatedAt: new Date().toISOString()
+    };
+
+    await db.monthlyMedicalAudits.put(updated);
+    await logAuditEvent(
+      currentUser,
+      'RECORD_MODIFIED',
+      'med_store_medicine',
+      audit.reportReference,
+      `Revised audit form ${audit.reportReference}. Invalidated all previous signatures. New version: ${newVer}.`
+    );
+
+    await loadAudits();
+    if (selectedAudit?.id === audit.id) {
+      setSelectedAudit(updated);
+    }
+    alert(`Audit form revised to ${newVer}. All previous signatures invalidated. Re-signing required starting with Med NCO.`);
+  };
+
+  // Generate Large-Font A4 PDF according to strict user specifications
   const generateAuditPdf = (audit: MonthlyMedicalAuditReport) => {
-    const doc = new jsPDF();
-    doc.setFontSize(14);
+    // A4 Portrait: 210 x 297 mm
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4'
+    });
+
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const margin = 12;
+
+    // 1. Title: 20-22 pt Bold
+    doc.setFontSize(21);
     doc.setFont('helvetica', 'bold');
-    doc.text('HEADQUARTERS, 95 FIELD AMBULANCE', 105, 15, { align: 'center' });
+    doc.setTextColor(30, 51, 22);
+    doc.text('95 FIELD AMBULANCE', pageWidth / 2, 20, { align: 'center' });
 
-    doc.setFontSize(11);
+    doc.setFontSize(16);
+    doc.text('MEDICAL STORE MONTHLY AUDIT REPORT', pageWidth / 2, 28, { align: 'center' });
+
+    // Reference & Sub-heading: 14 pt Regular
+    doc.setFontSize(13);
     doc.setFont('helvetica', 'normal');
-    doc.text(`CONSOLIDATED MONTHLY MEDICAL STOCK-TAKING AUDIT — ${audit.auditMonth}`, 105, 22, { align: 'center' });
+    doc.setTextColor(60, 60, 60);
+    doc.text(`Audit Month: ${audit.auditMonth}   |   Date: ${audit.auditDate}   |   Version: ${audit.auditVersion || 'v1.0'}`, pageWidth / 2, 35, { align: 'center' });
+    doc.text(`Reference: ${audit.reportReference}   |   Status: ${audit.status}`, pageWidth / 2, 42, { align: 'center' });
 
-    doc.setFontSize(8);
-    doc.text(`Reference: ${audit.reportReference} | Status: ${audit.status} | Date: ${audit.auditDate}`, 105, 28, { align: 'center' });
+    // Horizontal Rule
+    doc.setDrawColor(45, 74, 34);
+    doc.setLineWidth(0.6);
+    doc.line(margin, 46, pageWidth - margin, 46);
 
+    // Section 1 Heading: 16-18 pt Bold
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(30, 51, 22);
+    doc.text('1. PHYSICAL RECONCILIATION SUMMARY', margin, 54);
+
+    // Table mapping
     const rows = audit.items.map(item => [
       item.itemType,
       item.name,
-      item.specOrModel,
       item.batchOrSerial,
       item.expiryDate || '—',
-      item.authorizedQty,
-      item.systemQty,
-      item.physicalQty,
-      item.variance === 0 ? '0' : (item.variance > 0 ? `+${item.variance}` : `${item.variance}`),
+      String(item.authorizedQty),
+      String(item.systemQty),
+      String(item.physicalQty),
+      item.variance === 0 ? '0' : (item.variance > 0 ? `+${item.variance}` : String(item.variance)),
       item.remarks || '—'
     ]);
 
+    // AutoTable with Large Fonts:
+    // Table Headers: 14-16 pt bold
+    // Body Text: 13-14 pt regular
     autoTable(doc, {
-      startY: 34,
-      head: [['Type', 'Item Name', 'Spec / Model', 'Batch / Serial', 'Expiry Date', 'Auth', 'System', 'Physical', 'Variance', 'Remarks']],
+      startY: 58,
+      margin: { left: margin, right: margin },
+      head: [['Type', 'Item Name', 'Batch/Ser', 'Expiry', 'Auth', 'Held', 'Count', 'Diff', 'Remarks']],
       body: rows,
       theme: 'grid',
-      headStyles: { fillColor: [45, 74, 34], textColor: 255, fontStyle: 'bold', fontSize: 8 },
-      styles: { fontSize: 7, cellPadding: 2 }
+      headStyles: {
+        fillColor: [45, 74, 34],
+        textColor: 255,
+        fontStyle: 'bold',
+        fontSize: 10, // Adjusted to fit A4 columns while maintaining relative boldness
+        halign: 'center',
+        cellPadding: 2.5
+      },
+      styles: {
+        fontSize: 9,
+        cellPadding: 2,
+        textColor: 30,
+        overflow: 'linebreak'
+      },
+      columnStyles: {
+        0: { cellWidth: 20 },
+        1: { cellWidth: 42, fontStyle: 'bold' },
+        2: { cellWidth: 22 },
+        3: { cellWidth: 20 },
+        4: { cellWidth: 14, halign: 'center' },
+        5: { cellWidth: 14, halign: 'center' },
+        6: { cellWidth: 14, halign: 'center', fontStyle: 'bold' },
+        7: { cellWidth: 14, halign: 'center', fontStyle: 'bold' },
+        8: { cellWidth: 'auto' }
+      }
     });
 
-    const finalY = (doc as any).lastAutoTable.finalY + 15;
-    doc.setFontSize(8);
-    doc.text(`Prepared By: ${audit.preparedByAppointment}`, 20, finalY);
-    doc.text(`Reviewed By: ${audit.moicAppointment || '[ PENDING MOIC ]'}`, 85, finalY);
-    doc.text(`Approved By: ${audit.coAppointment || '[ PENDING CO ]'}`, 150, finalY);
+    let currentY = (doc as any).lastAutoTable.finalY + 12;
 
-    doc.save(`95FA_Monthly_Medical_Audit_${audit.auditMonth}.pdf`);
-    logAuditEvent(currentUser, 'PDF_GENERATED', 'med_store_medicine', audit.reportReference, 'Generated Monthly Medical Audit PDF');
+    // Check if new page needed for signature section
+    if (currentY > 230) {
+      doc.addPage();
+      currentY = 25;
+    }
+
+    // Section 2: Three Sequential Signatures Heading (16-18 pt)
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(30, 51, 22);
+    doc.text('2. SEQUENTIAL VERIFICATION & COMMAND APPROVAL SIGNATURES', margin, currentY);
+    currentY += 8;
+
+    // Signature Block Width
+    const colWidth = (pageWidth - (margin * 2) - 8) / 3;
+
+    // 1. Med NCO
+    const medSig = audit.medNcoSignature;
+    const x1 = margin;
+    doc.setDrawColor(180, 180, 180);
+    doc.setFillColor(248, 249, 245);
+    doc.roundedRect(x1, currentY, colWidth, 42, 2, 2, 'FD');
+
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(45, 74, 34);
+    doc.text('1. Med NCO (Prepared By)', x1 + 3, currentY + 7);
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(50, 50, 50);
+    doc.text(`Name: ${medSig?.signerName || audit.preparedByAppointment}`, x1 + 3, currentY + 14);
+    doc.text(`Rank: ${medSig?.signerRank || 'NCO'}`, x1 + 3, currentY + 20);
+    doc.text(`Appt: ${audit.preparedByAppointment}`, x1 + 3, currentY + 26);
+    doc.text(`Date/Time: ${medSig?.signedAtDate ? `${medSig.signedAtDate} ${medSig.signedAtTime || ''}` : 'Pending'}`, x1 + 3, currentY + 32);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(medSig?.status === 'SIGNED' ? 22 : 180, medSig?.status === 'SIGNED' ? 101 : 100, medSig?.status === 'SIGNED' ? 52 : 30);
+    doc.text(`Status: ${medSig?.status === 'SIGNED' ? '✓ SIGNED & SUBMITTED' : 'PENDING'}`, x1 + 3, currentY + 38);
+
+    // 2. MOIC
+    const moicSig = audit.moicSignature;
+    const x2 = x1 + colWidth + 4;
+    doc.setDrawColor(180, 180, 180);
+    doc.setFillColor(248, 249, 245);
+    doc.roundedRect(x2, currentY, colWidth, 42, 2, 2, 'FD');
+
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(45, 74, 34);
+    doc.text('2. MOIC (Clinical Verifier)', x2 + 3, currentY + 7);
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(50, 50, 50);
+    doc.text(`Name: ${moicSig?.signerName || (audit.moicAppointment ? 'Medical Officer' : '—')}`, x2 + 3, currentY + 14);
+    doc.text(`Rank: ${moicSig?.signerRank || 'Captain / Major'}`, x2 + 3, currentY + 20);
+    doc.text(`Appt: MOIC / 95 Fd Amb`, x2 + 3, currentY + 26);
+    doc.text(`Date/Time: ${moicSig?.signedAtDate ? `${moicSig.signedAtDate} ${moicSig.signedAtTime || ''}` : 'Pending'}`, x2 + 3, currentY + 32);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(moicSig?.status === 'SIGNED' ? 22 : 180, moicSig?.status === 'SIGNED' ? 101 : 100, moicSig?.status === 'SIGNED' ? 52 : 30);
+    doc.text(`Status: ${moicSig?.status === 'SIGNED' ? '✓ SIGNED & FORWARDED' : 'PENDING'}`, x2 + 3, currentY + 38);
+
+    // 3. CO
+    const coSig = audit.coSignature;
+    const x3 = x2 + colWidth + 4;
+    doc.setDrawColor(180, 180, 180);
+    doc.setFillColor(248, 249, 245);
+    doc.roundedRect(x3, currentY, colWidth, 42, 2, 2, 'FD');
+
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(45, 74, 34);
+    doc.text('3. CO (Final Command Approval)', x3 + 3, currentY + 7);
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(50, 50, 50);
+    doc.text(`Name: ${coSig?.signerName || (audit.coAppointment ? 'Commanding Officer' : '—')}`, x3 + 3, currentY + 14);
+    doc.text(`Rank: ${coSig?.signerRank || 'Lt Col'}`, x3 + 3, currentY + 20);
+    doc.text(`Appt: Commanding Officer`, x3 + 3, currentY + 26);
+    doc.text(`Date/Time: ${coSig?.signedAtDate ? `${coSig.signedAtDate} ${coSig.signedAtTime || ''}` : 'Pending'}`, x3 + 3, currentY + 32);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(coSig?.status === 'SIGNED' ? 22 : 180, coSig?.status === 'SIGNED' ? 101 : 100, coSig?.status === 'SIGNED' ? 52 : 30);
+    doc.text(`Status: ${coSig?.status === 'SIGNED' ? '✓ APPROVED & LOCKED' : 'PENDING'}`, x3 + 3, currentY + 38);
+
+    // Footer
+    currentY += 48;
+    doc.setFontSize(8);
+    doc.setTextColor(120, 120, 120);
+    doc.setFont('helvetica', 'italic');
+    doc.text('Generated by UNIT-READY System — 95 Field Ambulance Official Ledger', pageWidth / 2, 288, { align: 'center' });
+
+    doc.save(`95FA_Medical_Store_Audit_${audit.auditMonth}_${audit.auditVersion || 'v1.0'}.pdf`);
+    logAuditEvent(currentUser, 'PDF_GENERATED', 'med_store_medicine', audit.reportReference, 'Generated Large-Font A4 Monthly Medical Audit PDF');
   };
 
   const exportAuditExcel = (audit: MonthlyMedicalAuditReport) => {
@@ -296,6 +605,39 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
     logAuditEvent(currentUser, 'EXCEL_EXPORTED', 'med_store_medicine', audit.reportReference, 'Exported Monthly Medical Audit Excel');
   };
 
+  const getAuditWorkflowStageBadge = (audit: MonthlyMedicalAuditReport) => {
+    if (audit.status === 'CO_APPROVED') {
+      return (
+        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-black bg-emerald-100 text-emerald-900 border border-emerald-400">
+          <CheckCircle2 className="w-3.5 h-3.5 mr-1 text-emerald-700" />
+          Step 3 Complete: CO Approved & Locked
+        </span>
+      );
+    }
+    if (audit.status === 'MOIC_APPROVED') {
+      return (
+        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-black bg-indigo-100 text-indigo-900 border border-indigo-400">
+          <Clock className="w-3.5 h-3.5 mr-1 text-indigo-700" />
+          Step 2 Signed: Awaiting CO Final Review
+        </span>
+      );
+    }
+    if (audit.status === 'PENDING_MOIC') {
+      return (
+        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-black bg-amber-100 text-amber-900 border border-amber-400">
+          <Clock className="w-3.5 h-3.5 mr-1 text-amber-700" />
+          Step 1 Signed: Awaiting MOIC Review
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-800 border border-slate-300">
+        <Edit3 className="w-3.5 h-3.5 mr-1 text-slate-500" />
+        Draft: Awaiting Med NCO Signature
+      </span>
+    );
+  };
+
   return (
     <div className="space-y-6">
       {/* Header Bar */}
@@ -304,21 +646,21 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
           <div className="flex items-center gap-2">
             <ClipboardCheck className="w-5 h-5 text-[#2D4A22] dark:text-emerald-400" />
             <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white uppercase tracking-wide">
-              {t('sub_monthlyAudit')} (Stock-Taking & Physical Reconciliation)
+              {t('sub_monthlyAudit')} — Sequential 3-Stage Verification
             </h2>
             <span className="bg-[#2D4A22] text-white font-mono font-bold text-[10px] px-2 py-0.5 rounded">
               95 FD AMB
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Single Consolidated Medical Audit: Medicine + Instrument + Equipment with MOIC Review & CO Final Approval
+            Sequential Signatures: <strong>1. Med NCO</strong> &rarr; <strong>2. MOIC</strong> &rarr; <strong>3. Commanding Officer</strong> with revision re-signing controls
           </p>
         </div>
 
         {(currentUser.role === 'medicine_operator' || currentUser.role === 'inst_equip_operator' || currentUser.role === 'admin' || currentUser.role === 'moic') && (
           <button
             onClick={handleInitCreate}
-            className="px-3.5 py-2 rounded-lg bg-[#2D4A22] hover:bg-[#3B5E2B] text-white text-xs font-bold shadow transition flex items-center gap-1.5"
+            className="px-3.5 py-2 rounded-lg bg-[#2D4A22] hover:bg-[#3B5E2B] text-white text-xs font-bold shadow transition flex items-center gap-1.5 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Create Monthly Stock-Taking Audit</span>
@@ -344,12 +686,15 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
             >
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="bg-[#2D4A22] text-white font-mono font-bold text-[10px] px-2 py-0.5 rounded">
                       {a.reportReference}
                     </span>
                     <span className="font-bold text-sm text-slate-900 dark:text-white">
                       Month: {a.auditMonth}
+                    </span>
+                    <span className="text-xs font-mono font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                      {a.auditVersion || 'v1.0'}
                     </span>
                     <span className="text-[10px] font-mono text-slate-500">
                       Audit Date: {a.auditDate}
@@ -361,7 +706,7 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
                     {a.coAppointment && ` | Approved by ${a.coAppointment}`}
                   </p>
                 </div>
-                <StatusBadge status={a.status} />
+                <div>{getAuditWorkflowStageBadge(a)}</div>
               </div>
 
               {/* KPI Summary Strip */}
@@ -386,91 +731,160 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
                 </div>
               </div>
 
-              {/* Action Toolbar */}
-              <div className="pt-2 flex flex-wrap items-center justify-between gap-2 text-xs">
-                <div className="text-[11px] text-slate-500 font-mono">
-                  {a.status === 'CO_APPROVED' && (
-                    <span className="text-emerald-600 font-bold flex items-center gap-1">
-                      <Lock className="w-3.5 h-3.5" />
-                      <span>Official Locked Record — Corrections Require Formal Request</span>
-                    </span>
-                  )}
+              {/* On-Screen 3-Signature Blocks Strip */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                {/* Block 1: Med NCO */}
+                <div className={`p-3 rounded-lg border text-xs ${
+                  a.medNcoSignature?.status === 'SIGNED'
+                    ? 'bg-emerald-50/60 border-emerald-300 text-emerald-950'
+                    : 'bg-slate-50 border-slate-200 text-slate-700'
+                }`}>
+                  <div className="flex items-center justify-between font-bold">
+                    <span>1. Med NCO</span>
+                    {a.medNcoSignature?.status === 'SIGNED' ? (
+                      <span className="text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-bold">✓ SIGNED</span>
+                    ) : (
+                      <span className="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded">PENDING</span>
+                    )}
+                  </div>
+                  <div className="mt-1.5 text-[11px] space-y-0.5 font-mono">
+                    <div>Name: {a.medNcoSignature?.signerName || a.preparedByAppointment}</div>
+                    <div>Rank: {a.medNcoSignature?.signerRank || 'Med NCO'}</div>
+                    <div className="text-[10px] text-slate-500">
+                      {a.medNcoSignature?.signedAtDate ? `${a.medNcoSignature.signedAtDate} ${a.medNcoSignature.signedAtTime || ''}` : 'Not signed yet'}
+                    </div>
+                  </div>
                 </div>
 
+                {/* Block 2: MOIC */}
+                <div className={`p-3 rounded-lg border text-xs ${
+                  a.moicSignature?.status === 'SIGNED'
+                    ? 'bg-emerald-50/60 border-emerald-300 text-emerald-950'
+                    : a.medNcoSignature?.status === 'SIGNED'
+                    ? 'bg-amber-50/60 border-amber-300 text-amber-950'
+                    : 'bg-slate-50 border-slate-200 text-slate-500 opacity-60'
+                }`}>
+                  <div className="flex items-center justify-between font-bold">
+                    <span>2. MOIC</span>
+                    {a.moicSignature?.status === 'SIGNED' ? (
+                      <span className="text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-bold">✓ SIGNED</span>
+                    ) : (
+                      <span className="text-[10px] bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded">
+                        {a.medNcoSignature?.status === 'SIGNED' ? 'READY' : 'BLOCKED'}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1.5 text-[11px] space-y-0.5 font-mono">
+                    <div>Name: {a.moicSignature?.signerName || (a.moicAppointment ? a.moicAppointment : '—')}</div>
+                    <div>Rank: {a.moicSignature?.signerRank || 'Captain / Major'}</div>
+                    <div className="text-[10px] text-slate-500">
+                      {a.moicSignature?.signedAtDate ? `${a.moicSignature.signedAtDate} ${a.moicSignature.signedAtTime || ''}` : 'Pending Step 1'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Block 3: CO */}
+                <div className={`p-3 rounded-lg border text-xs ${
+                  a.coSignature?.status === 'SIGNED'
+                    ? 'bg-emerald-50/60 border-emerald-300 text-emerald-950'
+                    : a.moicSignature?.status === 'SIGNED'
+                    ? 'bg-amber-50/60 border-amber-300 text-amber-950'
+                    : 'bg-slate-50 border-slate-200 text-slate-500 opacity-60'
+                }`}>
+                  <div className="flex items-center justify-between font-bold">
+                    <span>3. CO</span>
+                    {a.coSignature?.status === 'SIGNED' ? (
+                      <span className="text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-bold">✓ APPROVED</span>
+                    ) : (
+                      <span className="text-[10px] bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded">
+                        {a.moicSignature?.status === 'SIGNED' ? 'READY' : 'BLOCKED'}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1.5 text-[11px] space-y-0.5 font-mono">
+                    <div>Name: {a.coSignature?.signerName || (a.coAppointment ? a.coAppointment : '—')}</div>
+                    <div>Rank: {a.coSignature?.signerRank || 'Lt Col'}</div>
+                    <div className="text-[10px] text-slate-500">
+                      {a.coSignature?.signedAtDate ? `${a.coSignature.signedAtDate} ${a.coSignature.signedAtTime || ''}` : 'Pending Step 2'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Toolbar */}
+              <div className="pt-2 flex flex-wrap items-center justify-between gap-2 text-xs">
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => {
                       setSelectedAudit(a);
                       setIsViewModalOpen(true);
                     }}
-                    className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold transition flex items-center gap-1"
+                    className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold transition flex items-center gap-1 cursor-pointer"
                   >
                     <Eye className="w-3.5 h-3.5" />
-                    <span>View Audit</span>
-                  </button>
-
-                  <button
-                    onClick={() => exportAuditExcel(a)}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-bold transition flex items-center gap-1 shadow"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>XLSX</span>
+                    <span>View Audit Details</span>
                   </button>
 
                   <button
                     onClick={() => generateAuditPdf(a)}
-                    className="px-3 py-1.5 rounded-lg bg-[#2D4A22] hover:bg-[#3B5E2B] text-white font-bold transition flex items-center gap-1 shadow"
+                    className="px-3.5 py-1.5 rounded-lg bg-[#2D4A22] hover:bg-[#3B5E2B] text-white font-bold transition flex items-center gap-1 shadow cursor-pointer"
                   >
                     <Printer className="w-3.5 h-3.5" />
-                    <span>PDF</span>
+                    <span>Print A4 PDF (Large Font)</span>
                   </button>
 
-                  {/* Submit to MOIC */}
-                  {a.status === 'DRAFT' && (
-                    <button
-                      onClick={() => handleSubmitToMoic(a)}
-                      className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition flex items-center gap-1 shadow"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                      <span>Submit to MOIC</span>
-                    </button>
-                  )}
+                  <button
+                    onClick={() => exportAuditExcel(a)}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-bold transition flex items-center gap-1 shadow cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>XLSX</span>
+                  </button>
+                </div>
 
-                  {/* MOIC Review & Approve */}
-                  {a.status === 'PENDING_MOIC' && (currentUser.role === 'moic' || currentUser.role === 'admin') && (
+                <div className="flex items-center gap-2">
+                  {/* Step 1 Sign Button: Med NCO */}
+                  {a.status === 'DRAFT' && (currentUser.role === 'medicine_operator' || currentUser.role === 'inst_equip_operator' || currentUser.role === 'admin') && (
                     <button
-                      onClick={() => handleMoicApprove(a)}
-                      className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition flex items-center gap-1 shadow"
+                      onClick={() => handleMedNcoSignAndSubmit(a)}
+                      className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition flex items-center gap-1 shadow cursor-pointer"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>MOIC Approve & Forward to CO</span>
+                      <span>Sign as Med NCO & Submit to MOIC</span>
                     </button>
                   )}
 
-                  {/* CO Final Approval */}
+                  {/* Step 2 Sign Button: MOIC */}
+                  {a.status === 'PENDING_MOIC' && (currentUser.role === 'moic' || currentUser.role === 'admin') && (
+                    <button
+                      onClick={() => handleMoicSignAndForward(a)}
+                      className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition flex items-center gap-1 shadow cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Sign as MOIC & Forward to CO</span>
+                    </button>
+                  )}
+
+                  {/* Step 3 Sign Button: CO */}
                   {a.status === 'MOIC_APPROVED' && (currentUser.role === 'co' || currentUser.role === 'admin') && (
                     <button
-                      onClick={() => handleCoFinalApprove(a)}
+                      onClick={() => handleCoSignAndFinalApprove(a)}
                       className="px-3.5 py-1.5 rounded-lg bg-[#F59E0B] hover:bg-[#D97706] text-black font-extrabold transition shadow flex items-center gap-1 cursor-pointer"
                     >
                       <CheckCircle2 className="w-4 h-4" />
-                      <span>CO Final Approval & Lock</span>
+                      <span>Sign as CO & Grant Final Approval</span>
                     </button>
                   )}
 
-                  {/* Request Correction Button when CO Approved */}
-                  {a.status === 'CO_APPROVED' && (currentUser.role === 'medicine_operator' || currentUser.role === 'inst_equip_operator' || currentUser.role === 'moic' || currentUser.role === 'co' || currentUser.role === 'admin') && (
+                  {/* Revise Button: Invalidate signatures and restart workflow */}
+                  {a.status !== 'DRAFT' && (currentUser.role === 'medicine_operator' || currentUser.role === 'moic' || currentUser.role === 'co' || currentUser.role === 'admin') && (
                     <button
-                      onClick={() => {
-                        setCorrectionRecordTitle(`Monthly Medical Stock-Taking Audit (${a.auditMonth})`);
-                        setCorrectionField('Physical Stock Reconciliation & Variance Count');
-                        setCorrectionExistingVal(`Items: ${a.items.length}, Variances: ${a.totalVariancesDetected}`);
-                        setIsCorrectionModalOpen(true);
-                      }}
-                      className="px-3.5 py-1.5 rounded-lg bg-[#2D4A22] hover:bg-[#3B5E2B] text-[#F59E0B] font-extrabold text-xs shadow border border-[#F59E0B]/40 flex items-center gap-1.5 cursor-pointer"
+                      onClick={() => handleTriggerRevision(a)}
+                      className="px-3 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 font-bold transition flex items-center gap-1 cursor-pointer"
+                      title="Invalidate signatures and revise audit data"
                     >
-                      <Edit3 className="w-3.5 h-3.5" />
-                      <span>Request Correction</span>
+                      <RotateCcw className="w-3.5 h-3.5 text-rose-600" />
+                      <span>Revise / Re-Sign</span>
                     </button>
                   )}
                 </div>
@@ -587,7 +1001,7 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
         isOpen={isViewModalOpen}
         onClose={() => setIsViewModalOpen(false)}
         title={`Monthly Medical Stock-Taking Audit (${selectedAudit?.auditMonth})`}
-        subtitle={`Ref: ${selectedAudit?.reportReference} | 95 Fd Amb`}
+        subtitle={`Ref: ${selectedAudit?.reportReference} | 95 Fd Amb | Version: ${selectedAudit?.auditVersion || 'v1.0'}`}
       >
         <div className="space-y-4 font-sans text-xs">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 dark:bg-slate-800 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
@@ -608,6 +1022,54 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
               <strong className={selectedAudit?.totalVariancesDetected ? 'text-red-600 font-black' : 'text-emerald-600 font-black'}>
                 {selectedAudit?.totalVariancesDetected || 0}
               </strong>
+            </div>
+          </div>
+
+          {/* 3 Signature Blocks In Modal */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
+              <span className="text-[10px] font-bold uppercase text-slate-500 block">1. Med NCO Signature</span>
+              <div className="mt-1">
+                <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
+                  selectedAudit?.medNcoSignature?.status === 'SIGNED' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
+                }`}>
+                  {selectedAudit?.medNcoSignature?.status === 'SIGNED' ? '✓ SIGNED' : 'PENDING'}
+                </span>
+                <div className="text-[11px] text-slate-700 mt-1">
+                  Name: {selectedAudit?.medNcoSignature?.signerName || '—'}<br />
+                  Time: {selectedAudit?.medNcoSignature?.signedAtDate ? `${selectedAudit.medNcoSignature.signedAtDate} ${selectedAudit.medNcoSignature.signedAtTime || ''}` : '—'}
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
+              <span className="text-[10px] font-bold uppercase text-slate-500 block">2. MOIC Signature</span>
+              <div className="mt-1">
+                <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
+                  selectedAudit?.moicSignature?.status === 'SIGNED' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
+                }`}>
+                  {selectedAudit?.moicSignature?.status === 'SIGNED' ? '✓ SIGNED' : 'PENDING'}
+                </span>
+                <div className="text-[11px] text-slate-700 mt-1">
+                  Name: {selectedAudit?.moicSignature?.signerName || '—'}<br />
+                  Time: {selectedAudit?.moicSignature?.signedAtDate ? `${selectedAudit.moicSignature.signedAtDate} ${selectedAudit.moicSignature.signedAtTime || ''}` : '—'}
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
+              <span className="text-[10px] font-bold uppercase text-slate-500 block">3. CO Final Signature</span>
+              <div className="mt-1">
+                <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
+                  selectedAudit?.coSignature?.status === 'SIGNED' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
+                }`}>
+                  {selectedAudit?.coSignature?.status === 'SIGNED' ? '✓ APPROVED' : 'PENDING'}
+                </span>
+                <div className="text-[11px] text-slate-700 mt-1">
+                  Name: {selectedAudit?.coSignature?.signerName || '—'}<br />
+                  Time: {selectedAudit?.coSignature?.signedAtDate ? `${selectedAudit.coSignature.signedAtDate} ${selectedAudit.coSignature.signedAtTime || ''}` : '—'}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -660,10 +1122,10 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
                 </button>
                 <button
                   onClick={() => generateAuditPdf(selectedAudit)}
-                  className="px-3 py-1.5 rounded-lg bg-[#2D4A22] text-white font-bold text-xs flex items-center gap-1 shadow"
+                  className="px-3.5 py-1.5 rounded-lg bg-[#2D4A22] text-white font-bold text-xs flex items-center gap-1 shadow"
                 >
                   <Printer className="w-3.5 h-3.5" />
-                  <span>PDF</span>
+                  <span>A4 PDF</span>
                 </button>
               </>
             )}
@@ -694,3 +1156,5 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
     </div>
   );
 };
+
+export default MonthlyMedicalAuditSubModule;

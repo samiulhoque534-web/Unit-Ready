@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { db } from '../../db/database';
-import { MedicineItem, MedicineBatch, ExpiryCategory, SectionApprovalRecord } from '../../types';
+import { MedicineItem, MedicineBatch, ExpiryCategory, SectionApprovalRecord, StockStatusType, MedicineTransaction } from '../../types';
 import { Modal } from '../common/Modal';
 import { StatusBadge } from '../common/StatusBadge';
 import { RequestCorrectionModal } from '../common/RequestCorrectionModal';
@@ -12,7 +12,8 @@ import {
   Pill, Search, Plus, AlertTriangle, 
   ShieldAlert, CheckCircle, ArrowRight, Clock, 
   Calendar, Layers, FileSpreadsheet, Package, 
-  AlertCircle, CheckCircle2, ShieldCheck, Edit3, Send, Trash2 
+  AlertCircle, CheckCircle2, ShieldCheck, Edit3, Send, Trash2,
+  TrendingDown, TrendingUp, RefreshCw, MapPin, User, ShieldX
 } from 'lucide-react';
 
 export const MedicineSubModule: React.FC = () => {
@@ -23,7 +24,7 @@ export const MedicineSubModule: React.FC = () => {
   const [batches, setBatches] = useState<MedicineBatch[]>([]);
   const [approvalRecord, setApprovalRecord] = useState<SectionApprovalRecord | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [expiryCategoryFilter, setExpiryCategoryFilter] = useState<string>('ALL');
+  const [stockStatusFilter, setStockStatusFilter] = useState<string>('ALL');
 
   // Correction Request Modal State
   const [isCorrectionModalOpen, setIsCorrectionModalOpen] = useState<boolean>(false);
@@ -39,9 +40,12 @@ export const MedicineSubModule: React.FC = () => {
   const [strength, setStrength] = useState<string>('500 mg');
   const [dosageForm, setDosageForm] = useState<string>('Tablet');
   const [unitOfIssue, setUnitOfIssue] = useState<string>('Tablets');
+  const [batchNumberInput, setBatchNumberInput] = useState<string>('B-95FA-01');
   const [expiryDate, setExpiryDate] = useState<string>('2027-08-30'); // Mandatory Expiry Date
   const [authQty, setAuthQty] = useState<number>(5000);
-  const [currentQty, setCurrentQty] = useState<number>(200);
+  const [heldQty, setHeldQty] = useState<number>(200);
+  const [receivedQty, setReceivedQty] = useState<number>(0);
+  const [issuedQty, setIssuedQty] = useState<number>(0);
   const [minLevel, setMinLevel] = useState<number>(500);
   const [maxLevel, setMaxLevel] = useState<number>(10000);
   const [unitPrice, setUnitPrice] = useState<number>(1.20);
@@ -67,8 +71,20 @@ export const MedicineSubModule: React.FC = () => {
   const [selectedBatchId, setSelectedBatchId] = useState<string>('');
   const [issueQty, setIssueQty] = useState<number>(1);
   const [issuedTo, setIssuedTo] = useState<string>('MI Room Emergency Bay');
-  const [voucherRef, setVoucherRef] = useState<string>('VOUCH/95FA/2026/08/101');
+  const [issuePlace, setIssuePlace] = useState<string>('Camp Medical Post');
+  const [issuedByName, setIssuedByName] = useState<string>('');
+  const [issueDate, setIssueDate] = useState<string>(new Date().toISOString().slice(0, 10));
+  const [voucherRef, setVoucherRef] = useState<string>('');
   const [fefoOverrideWarning, setFefoOverrideWarning] = useState<boolean>(false);
+
+  // Success Confirmation State
+  const [issueSuccessInfo, setIssueSuccessInfo] = useState<{
+    medicineName: string;
+    issueId: string;
+    quantityIssued: number;
+    unit: string;
+    remainingBalance: number;
+  } | null>(null);
 
   const loadData = async () => {
     const medList = await db.medicines.toArray();
@@ -83,7 +99,12 @@ export const MedicineSubModule: React.FC = () => {
     loadData();
 
     const handleCloudSync = (e: any) => {
-      if (e.detail?.collection === 'medicines' || e.detail?.collection === 'medicineBatches' || e.detail?.collection === 'sectionApprovals') {
+      if (
+        e.detail?.collection === 'medicines' ||
+        e.detail?.collection === 'medicineBatches' ||
+        e.detail?.collection === 'sectionApprovals' ||
+        e.detail?.collection === 'medicineTransactions'
+      ) {
         loadData();
       }
     };
@@ -106,6 +127,76 @@ export const MedicineSubModule: React.FC = () => {
       return `${parts[2]}-${parts[1]}-${parts[0]}`;
     }
     return isoDate;
+  };
+
+  // Helper to compute balance quantity: Held + Received - Issued (never < 0)
+  const calculateBalance = (med: MedicineItem): number => {
+    const held = Number(med.heldQuantity) || Number(med.currentQuantity) || 0;
+    const received = Number(med.receivedQuantity) || 0;
+    const issued = Number(med.issuedQuantity) || 0;
+    return Math.max(0, held + received - issued);
+  };
+
+  // Compute stock status badge and classification
+  const getMedicineStockStatus = (med: MedicineItem, earliestExp?: string): StockStatusType => {
+    if (med.stockStatus === 'QUARANTINED') return 'QUARANTINED';
+    const exp = earliestExp || med.expiryDate;
+    const days = getDaysRemaining(exp);
+    if (days < 0) return 'EXPIRED';
+    const balance = calculateBalance(med);
+    if (balance <= 0) return 'OUT_OF_STOCK';
+    if (days <= 30) return 'SHORT_DATED';
+    if (balance <= (Number(med.minimumLevel) || 100)) return 'LOW_STOCK';
+    return 'AVAILABLE';
+  };
+
+  const renderStockStatusBadge = (status: StockStatusType) => {
+    switch (status) {
+      case 'AVAILABLE':
+        return (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300">
+            <CheckCircle2 className="w-3.5 h-3.5 mr-1 text-emerald-600" />
+            Available
+          </span>
+        );
+      case 'LOW_STOCK':
+        return (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300 dark:bg-amber-950 dark:text-amber-300">
+            <AlertTriangle className="w-3.5 h-3.5 mr-1 text-amber-600" />
+            Low Stock
+          </span>
+        );
+      case 'OUT_OF_STOCK':
+        return (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-800 border border-red-300 dark:bg-red-950 dark:text-red-300">
+            <ShieldAlert className="w-3.5 h-3.5 mr-1 text-red-600" />
+            Out of Stock
+          </span>
+        );
+      case 'SHORT_DATED':
+        return (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-orange-100 text-orange-800 border border-orange-300 dark:bg-orange-950 dark:text-orange-300">
+            <Clock className="w-3.5 h-3.5 mr-1 text-orange-600" />
+            Short-Dated (≤30d)
+          </span>
+        );
+      case 'EXPIRED':
+        return (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-rose-950 text-white border border-rose-800">
+            <ShieldX className="w-3.5 h-3.5 mr-1 text-rose-300" />
+            Expired (Do Not Issue)
+          </span>
+        );
+      case 'QUARANTINED':
+        return (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-purple-100 text-purple-800 border border-purple-300 dark:bg-purple-950 dark:text-purple-300">
+            <AlertCircle className="w-3.5 h-3.5 mr-1 text-purple-600" />
+            Quarantined
+          </span>
+        );
+      default:
+        return null;
+    }
   };
 
   const getExpiryCategoryInfo = (expDateStr: string, isQuarantined?: boolean): {
@@ -148,39 +239,62 @@ export const MedicineSubModule: React.FC = () => {
     }
   };
 
-  // Batches classification
-  const expiredBatches = batches.filter(b => getDaysRemaining(b.expiryDate) < 0 || b.status === 'EXPIRED');
-  const shortDatedBatches = batches.filter(b => {
-    const days = getDaysRemaining(b.expiryDate);
-    return days >= 0 && days <= 30 && b.status !== 'EXPIRED';
-  });
-  const heldNormalBatches = batches.filter(b => {
-    const days = getDaysRemaining(b.expiryDate);
-    return days > 30 && b.status !== 'EXPIRED';
-  });
-
-  const totalHeldUnits = medicines.reduce((sum, m) => sum + (Number(m.currentQuantity) || 0), 0);
-  const totalAuthUnits = medicines.reduce((sum, m) => sum + (Number(m.authorizedQuantity) || 0), 0);
-
-  const calcValuation = (batchArr: MedicineBatch[]) => {
-    return batchArr.reduce((sum, b) => {
-      const med = medicines.find(m => m.id === b.medicineId);
-      const price = med?.unitPrice || 0;
-      return sum + (b.currentQuantity * price);
-    }, 0);
-  };
-
-  const getUsableQuantity = (medId: string) => {
-    return batches
-      .filter(b => b.medicineId === medId && getDaysRemaining(b.expiryDate) >= 0 && b.status !== 'EXPIRED')
-      .reduce((sum, b) => sum + b.currentQuantity, 0);
-  };
-
   const getBatchesForMed = (medId: string) => {
     return batches
       .filter(b => b.medicineId === medId)
       .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
   };
+
+  // Aggregated quantities across all medicines
+  const metrics = useMemo(() => {
+    let totalAuth = 0;
+    let totalHeld = 0;
+    let totalReceived = 0;
+    let totalIssued = 0;
+    let totalBalance = 0;
+    let availableCount = 0;
+    let lowStockCount = 0;
+    let outOfStockCount = 0;
+    let shortDatedCount = 0;
+    let expiredCount = 0;
+
+    medicines.forEach(m => {
+      const auth = Number(m.authorizedQuantity) || 0;
+      const held = Number(m.heldQuantity) || Number(m.currentQuantity) || 0;
+      const rec = Number(m.receivedQuantity) || 0;
+      const iss = Number(m.issuedQuantity) || 0;
+      const bal = calculateBalance(m);
+
+      totalAuth += auth;
+      totalHeld += held;
+      totalReceived += rec;
+      totalIssued += iss;
+      totalBalance += bal;
+
+      const medBatches = getBatchesForMed(m.id);
+      const earliestExp = m.expiryDate || (medBatches.length > 0 ? medBatches[0].expiryDate : '');
+      const status = getMedicineStockStatus(m, earliestExp);
+
+      if (status === 'AVAILABLE') availableCount++;
+      else if (status === 'LOW_STOCK') lowStockCount++;
+      else if (status === 'OUT_OF_STOCK') outOfStockCount++;
+      else if (status === 'SHORT_DATED') shortDatedCount++;
+      else if (status === 'EXPIRED') expiredCount++;
+    });
+
+    return {
+      totalAuth,
+      totalHeld,
+      totalReceived,
+      totalIssued,
+      totalBalance,
+      availableCount,
+      lowStockCount,
+      outOfStockCount,
+      shortDatedCount,
+      expiredCount
+    };
+  }, [medicines, batches]);
 
   // Submit Medicine State to MOIC
   const handleSubmitToMoic = async () => {
@@ -269,23 +383,45 @@ export const MedicineSubModule: React.FC = () => {
 
   // FEFO Issue Modal Trigger
   const handleOpenIssue = (med: MedicineItem) => {
-    setSelectedMedForIssue(med);
-    const usableBatches = getBatchesForMed(med.id).filter(b => getDaysRemaining(b.expiryDate) >= 0 && b.status !== 'EXPIRED' && b.currentQuantity > 0);
-    if (usableBatches.length === 0) {
-      alert('CANNOT ISSUE: All held batches for this medicine are EXPIRED — DO NOT ISSUE.');
+    const balance = calculateBalance(med);
+    if (balance <= 0) {
+      alert(`CANNOT ISSUE: ${med.genericName} is OUT OF STOCK. Available Balance is 0.`);
       return;
     }
-    setSelectedBatchId(usableBatches[0].id);
+
+    setSelectedMedForIssue(med);
+    const usableBatches = getBatchesForMed(med.id).filter(
+      b => getDaysRemaining(b.expiryDate) >= 0 && b.status !== 'EXPIRED' && b.currentQuantity > 0
+    );
+
+    if (usableBatches.length === 0) {
+      alert('CANNOT ISSUE: All held batches for this medicine are EXPIRED or depleted. Cannot issue expired stock.');
+      return;
+    }
+
+    const defaultBatch = usableBatches[0];
+    setSelectedBatchId(defaultBatch.id);
     setIssueQty(1);
     setFefoOverrideWarning(false);
-    setVoucherRef(`VOUCH/95FA/2026/08/${Math.floor(100 + Math.random() * 900)}`);
+    
+    // Unique Issue ID: ISS-95FA-YYYYMMDD-XXXX
+    const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const randPart = Math.floor(1000 + Math.random() * 9000);
+    setVoucherRef(`ISS-95FA-${datePart}-${randPart}`);
+
+    setIssuedTo('MI Room Emergency Bay');
+    setIssuePlace('Camp Medical Post');
+    setIssuedByName(currentUser.fullName ? `${currentUser.rank || ''} ${currentUser.fullName}` : currentUser.appointmentTitle);
+    setIssueDate(new Date().toISOString().slice(0, 10));
     setIsIssueModalOpen(true);
   };
 
   const handleBatchSelect = (batchId: string) => {
     setSelectedBatchId(batchId);
     if (selectedMedForIssue) {
-      const usableBatches = getBatchesForMed(selectedMedForIssue.id).filter(b => getDaysRemaining(b.expiryDate) >= 0 && b.status !== 'EXPIRED' && b.currentQuantity > 0);
+      const usableBatches = getBatchesForMed(selectedMedForIssue.id).filter(
+        b => getDaysRemaining(b.expiryDate) >= 0 && b.status !== 'EXPIRED' && b.currentQuantity > 0
+      );
       if (usableBatches.length > 0 && usableBatches[0].id !== batchId) {
         setFefoOverrideWarning(true);
       } else {
@@ -303,43 +439,106 @@ export const MedicineSubModule: React.FC = () => {
 
     const expInfo = getExpiryCategoryInfo(targetBatch.expiryDate, targetBatch.status === 'EXPIRED');
     if (!expInfo.isUsable) {
-      alert('ISSUE BLOCKED — EXPIRED BATCH! Expired stock cannot be issued. Move to quarantine.');
+      alert('ISSUE BLOCKED — EXPIRED BATCH! Expired stock cannot be issued under military medical regulations.');
+      return;
+    }
+
+    const currentBalance = calculateBalance(selectedMedForIssue);
+    if (issueQty <= 0) {
+      alert('Issue quantity must be greater than zero.');
+      return;
+    }
+
+    if (issueQty > currentBalance) {
+      alert(`CANNOT ISSUE: Requested quantity (${issueQty}) exceeds available Balance Quantity (${currentBalance}).`);
       return;
     }
 
     if (issueQty > targetBatch.currentQuantity) {
-      alert(`Insufficient quantity in selected batch. Available: ${targetBatch.currentQuantity}`);
+      alert(`Selected batch only has ${targetBatch.currentQuantity} units available. Please issue from this batch or select next batch.`);
       return;
     }
 
-    const updatedQty = targetBatch.currentQuantity - issueQty;
-    await db.medicineBatches.update(targetBatch.id, { currentQuantity: updatedQty });
-
-    // Update medicine currentQuantity
-    const newMedCurrent = selectedMedForIssue.currentQuantity - issueQty;
-    const newShortage = newMedCurrent - selectedMedForIssue.authorizedQuantity;
-    await db.medicines.update(selectedMedForIssue.id, {
-      currentQuantity: newMedCurrent,
-      shortageOrExcess: newShortage
+    // 1. Deduct from batch
+    const updatedBatchQty = targetBatch.currentQuantity - issueQty;
+    await db.medicineBatches.update(targetBatch.id, {
+      currentQuantity: updatedBatchQty,
+      updatedAt: new Date().toISOString()
     });
 
-    await db.medicineTransactions.add({
+    // 2. Recalculate medicine quantities:
+    // Balance Quantity = Held Quantity + Received Quantity - Issued Quantity
+    const currentIssued = Number(selectedMedForIssue.issuedQuantity) || 0;
+    const newIssued = currentIssued + issueQty;
+    const baseHeld = Number(selectedMedForIssue.heldQuantity) || Number(selectedMedForIssue.currentQuantity) || 0;
+    const baseReceived = Number(selectedMedForIssue.receivedQuantity) || 0;
+    const newBalance = Math.max(0, baseHeld + baseReceived - newIssued);
+    const newShortage = newBalance - (Number(selectedMedForIssue.authorizedQuantity) || 0);
+
+    const medEarliestExp = targetBatch.expiryDate;
+    const newStockStatus = getMedicineStockStatus({
+      ...selectedMedForIssue,
+      heldQuantity: baseHeld,
+      receivedQuantity: baseReceived,
+      issuedQuantity: newIssued,
+      balanceQuantity: newBalance
+    }, medEarliestExp);
+
+    await db.medicines.update(selectedMedForIssue.id, {
+      issuedQuantity: newIssued,
+      balanceQuantity: newBalance,
+      currentQuantity: newBalance, // sync currentQuantity for backward compat
+      shortageOrExcess: newShortage,
+      stockStatus: newStockStatus,
+      updatedAt: new Date().toISOString()
+    });
+
+    // 3. Create unique transaction record
+    const newTx: MedicineTransaction = {
       id: 'tx-' + Date.now(),
+      issueId: voucherRef,
       transactionType: 'ISSUE',
       medicineId: selectedMedForIssue.id,
       medicineName: selectedMedForIssue.genericName,
+      strengthDosage: `${selectedMedForIssue.strength} (${selectedMedForIssue.dosageForm})`,
       batchId: targetBatch.id,
       batchNumber: targetBatch.batchNumber,
+      expiryDate: targetBatch.expiryDate,
       quantity: issueQty,
-      unitPrice: selectedMedForIssue.unitPrice,
-      totalValue: issueQty * selectedMedForIssue.unitPrice,
+      unit: selectedMedForIssue.unitOfIssue,
+      unitPrice: selectedMedForIssue.unitPrice || 0,
+      totalValue: issueQty * (selectedMedForIssue.unitPrice || 0),
       voucherReference: voucherRef,
-      issuedToRecipient: issuedTo,
+      issuedToRecipient: issuedTo.trim(),
+      placeLocation: issuePlace.trim(),
+      issuedByName: issuedByName.trim() || currentUser.appointmentTitle,
       performedByUserId: currentUser.id,
       performedByAppointment: currentUser.appointmentTitle,
       deviceId: activeDevice.id,
       transactionTimestamp: new Date().toISOString(),
-      remarks: fefoOverrideWarning ? 'FEFO Override: User selected later-expiry batch with recorded justification.' : 'Standard FEFO Issue.'
+      issueDate: issueDate,
+      remarks: fefoOverrideWarning
+        ? 'FEFO Override: User selected later-expiry batch with recorded justification.'
+        : 'Standard FEFO Issue.'
+    };
+
+    if (db.medicineTransactions) {
+      await db.medicineTransactions.add(newTx);
+      await syncEntityToCloud('medicineTransactions', newTx.id, newTx);
+    }
+
+    await syncEntityToCloud('medicines', selectedMedForIssue.id, {
+      ...selectedMedForIssue,
+      issuedQuantity: newIssued,
+      balanceQuantity: newBalance,
+      currentQuantity: newBalance,
+      shortageOrExcess: newShortage,
+      stockStatus: newStockStatus
+    });
+
+    await syncEntityToCloud('medicineBatches', targetBatch.id, {
+      ...targetBatch,
+      currentQuantity: updatedBatchQty
     });
 
     await logAuditEvent(
@@ -347,10 +546,18 @@ export const MedicineSubModule: React.FC = () => {
       'DRAFT_SAVED',
       'med_store_medicine',
       voucherRef,
-      `Issued ${issueQty} ${selectedMedForIssue.unitOfIssue} of ${selectedMedForIssue.genericName} (Batch: ${targetBatch.batchNumber}) to ${issuedTo}.`
+      `Issued ${issueQty} ${selectedMedForIssue.unitOfIssue} of ${selectedMedForIssue.genericName} (Batch: ${targetBatch.batchNumber}, Expiry: ${targetBatch.expiryDate}) to ${issuedTo}. Issue ID: ${voucherRef}. Remaining Balance: ${newBalance}.`
     );
 
     setIsIssueModalOpen(false);
+    setIssueSuccessInfo({
+      medicineName: selectedMedForIssue.genericName,
+      issueId: voucherRef,
+      quantityIssued: issueQty,
+      unit: selectedMedForIssue.unitOfIssue,
+      remainingBalance: newBalance
+    });
+
     loadData();
   };
 
@@ -361,9 +568,12 @@ export const MedicineSubModule: React.FC = () => {
     setStrength('500 mg');
     setDosageForm('Tablet');
     setUnitOfIssue('Tablets');
+    setBatchNumberInput(`B-95FA-${Math.floor(10 + Math.random() * 90)}`);
     setExpiryDate('2027-08-30');
     setAuthQty(5000);
-    setCurrentQty(200);
+    setHeldQty(200);
+    setReceivedQty(0);
+    setIssuedQty(0);
     setMinLevel(500);
     setMaxLevel(10000);
     setUnitPrice(1.20);
@@ -381,9 +591,12 @@ export const MedicineSubModule: React.FC = () => {
     setStrength(med.strength);
     setDosageForm(med.dosageForm);
     setUnitOfIssue(med.unitOfIssue);
+    setBatchNumberInput(med.batchNumber || 'B-95FA-01');
     setExpiryDate(med.expiryDate);
     setAuthQty(med.authorizedQuantity);
-    setCurrentQty(med.currentQuantity);
+    setHeldQty(med.heldQuantity || med.currentQuantity || 0);
+    setReceivedQty(med.receivedQuantity || 0);
+    setIssuedQty(med.issuedQuantity || 0);
     setMinLevel(med.minimumLevel);
     setMaxLevel(med.maximumLevel);
     setUnitPrice(med.unitPrice);
@@ -396,7 +609,7 @@ export const MedicineSubModule: React.FC = () => {
 
   const handleDeleteMed = async (med: MedicineItem) => {
     const confirmDelete = window.confirm(
-      `Are you sure you want to delete / archive "${med.genericName} (${med.strength})"?\n\nThis will remove the medicine from the active inventory list while preserving a tamper-evident audit trail.`
+      `Are you sure you want to delete / archive "${med.genericName} (${med.strength})"?\n\nThis will remove the medicine from active inventory while preserving a permanent audit record.`
     );
     if (!confirmDelete) return;
 
@@ -432,7 +645,9 @@ export const MedicineSubModule: React.FC = () => {
       return;
     }
 
-    const shortage = Number(currentQty) - Number(authQty);
+    // Balance calculation: Held + Received - Issued
+    const calculatedBal = Math.max(0, Number(heldQty) + Number(receivedQty) - Number(issuedQty));
+    const shortage = calculatedBal - Number(authQty);
 
     if (editingMed) {
       const updated: MedicineItem = {
@@ -442,9 +657,14 @@ export const MedicineSubModule: React.FC = () => {
         strength,
         dosageForm,
         unitOfIssue,
+        batchNumber: batchNumberInput.trim() || editingMed.batchNumber,
         expiryDate,
         authorizedQuantity: Number(authQty),
-        currentQuantity: Number(currentQty),
+        heldQuantity: Number(heldQty),
+        receivedQuantity: Number(receivedQty),
+        issuedQuantity: Number(issuedQty),
+        balanceQuantity: calculatedBal,
+        currentQuantity: calculatedBal, // sync
         shortageOrExcess: shortage,
         minimumLevel: Number(minLevel),
         maximumLevel: Number(maxLevel),
@@ -452,17 +672,26 @@ export const MedicineSubModule: React.FC = () => {
         storageCondition: storage,
         isHighRiskLasa: isLasa,
         dailyConsumptionAverage: Number(dailyConsump),
-        remarks: medRemarks
+        remarks: medRemarks.trim(),
+        stockStatus: getMedicineStockStatus({
+          ...editingMed,
+          heldQuantity: Number(heldQty),
+          receivedQuantity: Number(receivedQty),
+          issuedQuantity: Number(issuedQty),
+          balanceQuantity: calculatedBal
+        }, expiryDate),
+        updatedAt: new Date().toISOString()
       };
-      await db.medicines.put(updated);
-      await syncEntityToCloud('medicines', updated.id, updated);
+
+      await db.medicines.update(editingMed.id, updated);
+      await syncEntityToCloud('medicines', editingMed.id, updated);
 
       await logAuditEvent(
         currentUser,
         'DRAFT_SAVED',
         'med_store_medicine',
         updated.genericName,
-        `Updated medicine: ${updated.genericName} (Expiry: ${expiryDate}, Auth: ${authQty}, Current: ${currentQty})`
+        `Updated medicine record: ${updated.genericName} (${updated.strength}, Balance: ${calculatedBal} ${unitOfIssue}).`
       );
     } else {
       const newMedId = 'med-' + Date.now();
@@ -473,9 +702,14 @@ export const MedicineSubModule: React.FC = () => {
         strength,
         dosageForm,
         unitOfIssue,
+        batchNumber: batchNumberInput.trim() || 'B-95FA-01',
         expiryDate,
         authorizedQuantity: Number(authQty),
-        currentQuantity: Number(currentQty),
+        heldQuantity: Number(heldQty),
+        receivedQuantity: Number(receivedQty),
+        issuedQuantity: Number(issuedQty),
+        balanceQuantity: calculatedBal,
+        currentQuantity: calculatedBal,
         shortageOrExcess: shortage,
         minimumLevel: Number(minLevel),
         maximumLevel: Number(maxLevel),
@@ -483,20 +717,43 @@ export const MedicineSubModule: React.FC = () => {
         storageCondition: storage,
         isHighRiskLasa: isLasa,
         dailyConsumptionAverage: Number(dailyConsump),
-        remarks: medRemarks,
+        remarks: medRemarks.trim(),
+        stockStatus: getMedicineStockStatus({
+          id: newMedId,
+          genericName: genericName.trim(),
+          strength,
+          dosageForm,
+          unitOfIssue,
+          expiryDate,
+          authorizedQuantity: Number(authQty),
+          heldQuantity: Number(heldQty),
+          receivedQuantity: Number(receivedQty),
+          issuedQuantity: Number(issuedQty),
+          balanceQuantity: calculatedBal,
+          currentQuantity: calculatedBal,
+          shortageOrExcess: shortage,
+          minimumLevel: Number(minLevel),
+          maximumLevel: Number(maxLevel),
+          unitPrice: Number(unitPrice),
+          storageCondition: storage,
+          isHighRiskLasa: isLasa,
+          dailyConsumptionAverage: Number(dailyConsump),
+          createdAt: new Date().toISOString()
+        }, expiryDate),
         createdAt: new Date().toISOString()
       };
-      await db.medicines.add(newMed);
-      await syncEntityToCloud('medicines', newMedId, newMed);
 
-      // Also create an initial batch for this medicine
+      await db.medicines.add(newMed);
+      await syncEntityToCloud('medicines', newMed.id, newMed);
+
+      // Create initial batch corresponding to held quantity
       const newBatch: MedicineBatch = {
-        id: 'b-' + Date.now(),
-        medicineId: newMedId,
-        batchNumber: `BATCH-${Date.now().toString().slice(-4)}`,
-        expiryDate: expiryDate,
-        receivedQuantity: Number(currentQty),
-        currentQuantity: Number(currentQty),
+        id: 'batch-' + Date.now(),
+        medicineId: newMed.id,
+        batchNumber: batchNumberInput.trim() || 'B-95FA-01',
+        expiryDate,
+        receivedQuantity: Number(heldQty) + Number(receivedQty),
+        currentQuantity: calculatedBal,
         rack: 'A',
         shelf: '01',
         bin: '01',
@@ -513,7 +770,7 @@ export const MedicineSubModule: React.FC = () => {
         'DRAFT_SAVED',
         'med_store_medicine',
         newMed.genericName,
-        `Added new medicine: ${newMed.genericName} (Expiry: ${expiryDate}, Qty: ${currentQty} ${unitOfIssue})`
+        `Added new medicine: ${newMed.genericName} (Expiry: ${expiryDate}, Balance: ${calculatedBal} ${unitOfIssue})`
       );
     }
 
@@ -525,28 +782,29 @@ export const MedicineSubModule: React.FC = () => {
     const matchesSearch = 
       m.genericName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (m.brandName && m.brandName.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      m.strength.toLowerCase().includes(searchQuery.toLowerCase());
+      m.strength.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (m.batchNumber && m.batchNumber.toLowerCase().includes(searchQuery.toLowerCase()));
     if (!matchesSearch) return false;
 
-    if (expiryCategoryFilter === 'ALL') return true;
+    if (stockStatusFilter === 'ALL') return true;
 
     const medBatches = getBatchesForMed(m.id);
     const earliestExp = m.expiryDate || (medBatches.length > 0 ? medBatches[0].expiryDate : '');
-    const info = getExpiryCategoryInfo(earliestExp);
-    return info.category === expiryCategoryFilter;
+    const status = getMedicineStockStatus(m, earliestExp);
+    return status === stockStatusFilter;
   });
 
   const canEdit = currentUser.role === 'medicine_operator' || currentUser.role === 'moic' || currentUser.role === 'co' || currentUser.role === '2ic' || currentUser.role === 'other_operator' || currentUser.role === 'admin';
 
   return (
     <div className="space-y-6">
-      {/* Read-Only Notice Banner for non-concerned personnel */}
+      {/* Read-Only Notice Banner for General Users */}
       {!canEdit && (
         <div className="bg-slate-100 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700 rounded-xl p-3 flex items-center justify-between text-xs text-slate-600 dark:text-slate-300 shadow-xs">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-emerald-600" />
             <span>
-              <strong>Read-Only View Mode:</strong> You are logged in as <strong>{currentUser.appointmentTitle}</strong>. Medicine inventory & FEFO issues are restricted to Medicine Store Operator, MOIC & CO.
+              <strong>Read-Only View Mode:</strong> You are logged in as <strong>{currentUser.appointmentTitle}</strong>. Medicine issuing and inventory alterations are restricted to Medical Store Operators, MOIC & Commanding Officer.
             </span>
           </div>
           <span className="font-mono text-[10px] bg-slate-200 dark:bg-slate-700 px-2 py-0.5 rounded font-bold">
@@ -555,87 +813,138 @@ export const MedicineSubModule: React.FC = () => {
         </div>
       )}
 
-      {/* 5 Enhanced Expiry & Stock Metrics Cards */}
+      {/* Numerical Stock Calculation Metrics Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        {/* Card 1: Total Authorized Quantity */}
+        {/* Card 1: Authorized Quantity */}
         <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs">
-          <span className="text-[10px] font-bold uppercase text-slate-500 block">1. Total Authorized</span>
+          <span className="text-[10px] font-bold uppercase text-slate-500 block">1. Authorized Qty</span>
           <div className="mt-1 flex items-baseline justify-between">
-            <span className="text-xl font-black font-mono text-slate-800 dark:text-slate-100">{formatNumber(totalAuthUnits)}</span>
-            <span className="text-[10px] text-slate-400 font-mono">Units</span>
+            <span className="text-xl font-black font-mono text-slate-800 dark:text-slate-100">{formatNumber(metrics.totalAuth)}</span>
+            <span className="text-[10px] text-slate-400 font-mono">Scale</span>
           </div>
-          <p className="text-[10px] text-slate-500 mt-1">{medicines.length} Types Authorized</p>
+          <p className="text-[10px] text-slate-500 mt-1">{medicines.length} Catalogued Items</p>
         </div>
 
-        {/* Card 2: Total Held / Current Quantity */}
+        {/* Card 2: Held Quantity */}
         <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs">
-          <span className="text-[10px] font-bold uppercase text-blue-600 dark:text-blue-400 block">2. Total Held Qty</span>
+          <span className="text-[10px] font-bold uppercase text-blue-600 dark:text-blue-400 block">2. Held Qty</span>
           <div className="mt-1 flex items-baseline justify-between">
-            <span className="text-xl font-black font-mono text-blue-700 dark:text-blue-300">{formatNumber(totalHeldUnits)}</span>
-            <span className="text-[10px] text-blue-500 font-mono">Units</span>
+            <span className="text-xl font-black font-mono text-blue-700 dark:text-blue-300">{formatNumber(metrics.totalHeld)}</span>
+            <span className="text-[10px] text-blue-500 font-mono">Base</span>
           </div>
-          <p className="text-[10px] text-slate-500 mt-1">Individual numbers/units</p>
+          <p className="text-[10px] text-slate-500 mt-1">Starting held holdings</p>
         </div>
 
-        {/* Card 3: Held Medicines – Normal Use (> 30 days) */}
-        <div 
-          onClick={() => setExpiryCategoryFilter(expiryCategoryFilter === 'HELD_NORMAL' ? 'ALL' : 'HELD_NORMAL')}
-          className={`p-3.5 rounded-xl border shadow-xs cursor-pointer transition ${
-            expiryCategoryFilter === 'HELD_NORMAL' ? 'ring-2 ring-emerald-500 bg-emerald-50 dark:bg-emerald-950/50' : 'bg-emerald-50/60 dark:bg-emerald-950/20 border-emerald-300 dark:border-emerald-800'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold uppercase text-emerald-800 dark:text-emerald-300">3. Held / Normal Use</span>
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-          </div>
+        {/* Card 3: Received Quantity */}
+        <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs">
+          <span className="text-[10px] font-bold uppercase text-indigo-600 dark:text-indigo-400 block">3. Received Qty</span>
           <div className="mt-1 flex items-baseline justify-between">
-            <span className="text-xl font-black font-mono text-emerald-900 dark:text-emerald-100">{formatNumber(heldNormalBatches.reduce((s, b) => s + b.currentQuantity, 0))}</span>
-            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono">&gt; 30d</span>
+            <span className="text-xl font-black font-mono text-indigo-700 dark:text-indigo-300">+{formatNumber(metrics.totalReceived)}</span>
+            <span className="text-[10px] text-indigo-500 font-mono">Total In</span>
           </div>
-          <p className="text-[10px] text-emerald-700 dark:text-emerald-400 mt-1 font-mono">
-            {heldNormalBatches.length} Active Batches
-          </p>
+          <p className="text-[10px] text-slate-500 mt-1">Incoming depot deliveries</p>
         </div>
 
-        {/* Card 4: Short-Dated Medicines (≤ 30 Days) */}
-        <div 
-          onClick={() => setExpiryCategoryFilter(expiryCategoryFilter === 'SHORT_DATED' ? 'ALL' : 'SHORT_DATED')}
-          className={`p-3.5 rounded-xl border shadow-xs cursor-pointer transition ${
-            expiryCategoryFilter === 'SHORT_DATED' ? 'ring-2 ring-amber-500 bg-amber-50 dark:bg-amber-950/50' : 'bg-amber-50/60 dark:bg-amber-950/20 border-amber-300 dark:border-amber-800'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold uppercase text-amber-700 dark:text-amber-300">4. Short-Dated</span>
-            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
-          </div>
+        {/* Card 4: Issued Quantity */}
+        <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs">
+          <span className="text-[10px] font-bold uppercase text-orange-600 dark:text-orange-400 block">4. Issued Qty</span>
           <div className="mt-1 flex items-baseline justify-between">
-            <span className="text-xl font-black font-mono text-amber-800 dark:text-amber-200">{formatNumber(shortDatedBatches.reduce((s, b) => s + b.currentQuantity, 0))}</span>
-            <span className="text-[10px] text-amber-600 font-mono">≤ 30d</span>
+            <span className="text-xl font-black font-mono text-orange-700 dark:text-orange-300">-{formatNumber(metrics.totalIssued)}</span>
+            <span className="text-[10px] text-orange-500 font-mono">Total Out</span>
           </div>
-          <p className="text-[10px] text-amber-700 dark:text-amber-300 mt-1 font-mono">
-            {shortDatedBatches.length} Critical Batches
-          </p>
+          <p className="text-[10px] text-slate-500 mt-1">Issued to bays & patients</p>
         </div>
 
-        {/* Card 5: Expired Medicines (< 0 Days) */}
-        <div 
-          onClick={() => setExpiryCategoryFilter(expiryCategoryFilter === 'EXPIRED' ? 'ALL' : 'EXPIRED')}
-          className={`p-3.5 rounded-xl border shadow-xs cursor-pointer transition ${
-            expiryCategoryFilter === 'EXPIRED' ? 'ring-2 ring-red-500 bg-red-950 text-white' : 'bg-red-950/80 text-white border-red-800'
-          }`}
-        >
+        {/* Card 5: Balance Quantity (Held + Received - Issued >= 0) */}
+        <div className="p-3.5 rounded-xl border-2 border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/40 shadow-sm">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold uppercase text-red-300">5. Expired Qty</span>
-            <ShieldAlert className="w-3.5 h-3.5 text-red-400" />
+            <span className="text-[10px] font-extrabold uppercase text-emerald-900 dark:text-emerald-200">
+              5. Balance Quantity
+            </span>
+            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
           </div>
           <div className="mt-1 flex items-baseline justify-between">
-            <span className="text-xl font-black font-mono text-red-100">{formatNumber(expiredBatches.reduce((s, b) => s + b.currentQuantity, 0))}</span>
-            <span className="text-[10px] text-red-300 font-mono">Expired</span>
+            <span className="text-2xl font-black font-mono text-emerald-900 dark:text-emerald-100">
+              {formatNumber(metrics.totalBalance)}
+            </span>
+            <span className="text-[10px] text-emerald-700 dark:text-emerald-300 font-mono font-bold">Available</span>
           </div>
-          <p className="text-[10px] text-red-300/80 mt-1 font-mono">
-            {expiredBatches.length} Quarantined
+          <p className="text-[10px] text-emerald-800 dark:text-emerald-300 mt-1 font-mono">
+            Held + Rcvd − Issued ≥ 0
           </p>
         </div>
+      </div>
+
+      {/* Quick Status Badges Summary */}
+      <div className="flex flex-wrap gap-2 text-xs">
+        <button
+          onClick={() => setStockStatusFilter(stockStatusFilter === 'AVAILABLE' ? 'ALL' : 'AVAILABLE')}
+          className={`px-3 py-1.5 rounded-lg border font-semibold transition flex items-center gap-1.5 ${
+            stockStatusFilter === 'AVAILABLE'
+              ? 'bg-emerald-600 text-white border-emerald-600'
+              : 'bg-white text-emerald-800 border-emerald-300 hover:bg-emerald-50'
+          }`}
+        >
+          <CheckCircle2 className="w-3.5 h-3.5" />
+          Available ({metrics.availableCount})
+        </button>
+
+        <button
+          onClick={() => setStockStatusFilter(stockStatusFilter === 'LOW_STOCK' ? 'ALL' : 'LOW_STOCK')}
+          className={`px-3 py-1.5 rounded-lg border font-semibold transition flex items-center gap-1.5 ${
+            stockStatusFilter === 'LOW_STOCK'
+              ? 'bg-amber-600 text-white border-amber-600'
+              : 'bg-white text-amber-800 border-amber-300 hover:bg-amber-50'
+          }`}
+        >
+          <AlertTriangle className="w-3.5 h-3.5" />
+          Low Stock ({metrics.lowStockCount})
+        </button>
+
+        <button
+          onClick={() => setStockStatusFilter(stockStatusFilter === 'SHORT_DATED' ? 'ALL' : 'SHORT_DATED')}
+          className={`px-3 py-1.5 rounded-lg border font-semibold transition flex items-center gap-1.5 ${
+            stockStatusFilter === 'SHORT_DATED'
+              ? 'bg-orange-600 text-white border-orange-600'
+              : 'bg-white text-orange-800 border-orange-300 hover:bg-orange-50'
+          }`}
+        >
+          <Clock className="w-3.5 h-3.5" />
+          Short-Dated ≤30d ({metrics.shortDatedCount})
+        </button>
+
+        <button
+          onClick={() => setStockStatusFilter(stockStatusFilter === 'EXPIRED' ? 'ALL' : 'EXPIRED')}
+          className={`px-3 py-1.5 rounded-lg border font-semibold transition flex items-center gap-1.5 ${
+            stockStatusFilter === 'EXPIRED'
+              ? 'bg-red-700 text-white border-red-700'
+              : 'bg-white text-red-800 border-red-300 hover:bg-red-50'
+          }`}
+        >
+          <ShieldAlert className="w-3.5 h-3.5" />
+          Expired ({metrics.expiredCount})
+        </button>
+
+        <button
+          onClick={() => setStockStatusFilter(stockStatusFilter === 'OUT_OF_STOCK' ? 'ALL' : 'OUT_OF_STOCK')}
+          className={`px-3 py-1.5 rounded-lg border font-semibold transition flex items-center gap-1.5 ${
+            stockStatusFilter === 'OUT_OF_STOCK'
+              ? 'bg-rose-700 text-white border-rose-700'
+              : 'bg-white text-rose-800 border-rose-300 hover:bg-rose-50'
+          }`}
+        >
+          <ShieldX className="w-3.5 h-3.5" />
+          Out of Stock ({metrics.outOfStockCount})
+        </button>
+
+        {stockStatusFilter !== 'ALL' && (
+          <button
+            onClick={() => setStockStatusFilter('ALL')}
+            className="px-2.5 py-1.5 rounded-lg bg-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-300"
+          >
+            Clear Filter
+          </button>
+        )}
       </div>
 
       {/* Action Bar */}
@@ -646,7 +955,7 @@ export const MedicineSubModule: React.FC = () => {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search generic medicine name, brand, strength..."
+            placeholder="Search generic medicine name, batch number, strength..."
             className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
           />
         </div>
@@ -654,14 +963,33 @@ export const MedicineSubModule: React.FC = () => {
         <div className="flex items-center gap-2 flex-wrap">
           {approvalRecord && <StatusBadge status={approvalRecord.status} />}
 
-          {/* Clearly Visible Add Medicine Button (Always available for authorized operators) */}
+          {/* Issue Medicine Action Button */}
+          {canEdit && (
+            <button
+              type="button"
+              onClick={() => {
+                const firstAvailable = medicines.find(m => calculateBalance(m) > 0);
+                if (firstAvailable) {
+                  handleOpenIssue(firstAvailable);
+                } else {
+                  alert('No medicines currently have available balance stock to issue.');
+                }
+              }}
+              className="px-4 py-2 rounded-xl bg-[#2D4A22] hover:bg-[#3B5E2B] text-white text-xs font-extrabold shadow-md transition flex items-center gap-2 cursor-pointer"
+            >
+              <ArrowRight className="w-4 h-4 text-amber-400" />
+              <span>Issue Medicine</span>
+            </button>
+          )}
+
+          {/* Add Medicine Button */}
           {canEdit && (
             <button
               type="button"
               onClick={handleOpenAddMed}
-              className="px-4 py-2 rounded-xl bg-[#2D4A22] hover:bg-[#3B5E2B] text-white text-xs font-extrabold shadow-md transition flex items-center gap-2 cursor-pointer"
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold shadow transition flex items-center gap-1.5 cursor-pointer"
             >
-              <Plus className="w-4 h-4 text-[#F59E0B]" />
+              <Plus className="w-4 h-4 text-amber-400" />
               <span>Add Medicine</span>
             </button>
           )}
@@ -701,177 +1029,249 @@ export const MedicineSubModule: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Medicine & Batch Register */}
+      {/* Main Medicine Inventory List */}
       <div className="space-y-4">
-        {filteredMedicines.map((m) => {
-          const medBatches = getBatchesForMed(m.id);
-          const usableQty = getUsableQuantity(m.id);
-          const earliestExpiry = m.expiryDate || (medBatches.length > 0 ? medBatches[0].expiryDate : '');
-          const daysRemaining = getDaysRemaining(earliestExpiry);
-          const expInfo = getExpiryCategoryInfo(earliestExpiry);
+        {filteredMedicines.length === 0 ? (
+          <div className="p-8 text-center bg-white dark:bg-slate-900 rounded-xl border border-slate-200 text-slate-500 text-sm">
+            No medicine items matched your search query or status filter.
+          </div>
+        ) : (
+          filteredMedicines.map((m) => {
+            const medBatches = getBatchesForMed(m.id);
+            const earliestExpiry = m.expiryDate || (medBatches.length > 0 ? medBatches[0].expiryDate : '');
+            const daysRemaining = getDaysRemaining(earliestExpiry);
+            const expInfo = getExpiryCategoryInfo(earliestExpiry);
 
-          return (
-            <div 
-              key={m.id}
-              className="bg-white dark:bg-slate-900 rounded-xl p-5 shadow-sm border border-slate-200 dark:border-slate-800 space-y-3"
-            >
-              {/* Medicine Header Row */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
-                <div>
+            const heldVal = Number(m.heldQuantity) || Number(m.currentQuantity) || 0;
+            const receivedVal = Number(m.receivedQuantity) || 0;
+            const issuedVal = Number(m.issuedQuantity) || 0;
+            const balanceVal = calculateBalance(m);
+            const stockStatus = getMedicineStockStatus(m, earliestExpiry);
+
+            // Primary batch number
+            const primaryBatch = m.batchNumber || (medBatches.length > 0 ? medBatches[0].batchNumber : 'N/A');
+
+            return (
+              <div 
+                key={m.id}
+                className="bg-white dark:bg-slate-900 rounded-xl p-5 shadow-sm border border-slate-200 dark:border-slate-800 space-y-4"
+              >
+                {/* Header Row */}
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-extrabold text-base text-slate-900 dark:text-white">
+                        {m.genericName}
+                      </h3>
+                      <span className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs px-2.5 py-0.5 rounded">
+                        {m.strength} ({m.dosageForm})
+                      </span>
+                      {renderStockStatusBadge(stockStatus)}
+                      {m.isHighRiskLasa && (
+                        <span className="bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300 font-black text-[10px] px-2 py-0.5 rounded border border-red-400">
+                          LASA HIGH RISK
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 font-mono mt-1">
+                      <span>Brand: <strong className="text-slate-700 dark:text-slate-300">{m.brandName || 'Generic'}</strong></span>
+                      <span>Batch: <strong className="text-indigo-700 dark:text-indigo-400">{primaryBatch}</strong></span>
+                      <span>Unit: <strong>{m.unitOfIssue}</strong></span>
+                      <span>Storage: {m.storageCondition}</span>
+                    </div>
+                  </div>
+
                   <div className="flex items-center gap-2">
-                    <h3 className="font-extrabold text-sm sm:text-base text-slate-900 dark:text-white">
-                      {m.genericName}
-                    </h3>
-                    <span className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs px-2 py-0.5 rounded">
-                      {m.strength} ({m.dosageForm})
-                    </span>
-                    {m.isHighRiskLasa && (
-                      <span className="bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300 font-black text-[9px] px-1.5 py-0.5 rounded border border-red-400">
-                        LASA HIGH RISK
+                    {canEdit ? (
+                      <>
+                        <button
+                          onClick={() => handleOpenIssue(m)}
+                          disabled={balanceVal <= 0 || stockStatus === 'EXPIRED'}
+                          className="px-3.5 py-1.5 rounded-lg bg-[#2D4A22] hover:bg-[#3B5E2B] disabled:bg-slate-300 disabled:text-slate-500 text-white text-xs font-bold shadow flex items-center gap-1.5 transition cursor-pointer"
+                        >
+                          <ArrowRight className="w-3.5 h-3.5 text-amber-300" />
+                          <span>Issue Medicine</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleOpenEditMed(m)}
+                          className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold cursor-pointer"
+                          title="Edit Medicine Details"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+
+                        <button
+                          onClick={() => handleDeleteMed(m)}
+                          className="p-2 rounded-lg bg-red-100 hover:bg-red-200 dark:bg-red-950/60 dark:hover:bg-red-900 text-red-700 dark:text-red-300 text-xs font-semibold cursor-pointer"
+                          title="Delete / Archive Medicine"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
+                    ) : (
+                      <span className="text-slate-400 font-mono text-xs px-2.5 py-1 bg-slate-100 dark:bg-slate-800 rounded font-semibold">
+                        View Only
                       </span>
                     )}
                   </div>
-                  <p className="text-[11px] text-slate-500 font-mono mt-0.5">
-                    Brand: <strong className="text-slate-700 dark:text-slate-300">{m.brandName || 'Generic'}</strong> | Unit: {m.unitOfIssue} | Storage: {m.storageCondition}
-                  </p>
                 </div>
 
-                <div className="flex items-center gap-3">
-                  {/* Stock Equation Strip */}
-                  <div className="flex items-center gap-3 font-mono text-xs bg-slate-50 dark:bg-slate-800/60 p-2 rounded-lg border border-slate-200 dark:border-slate-700">
-                    <div>
-                      <span className="text-[9px] text-slate-500 font-bold uppercase block font-sans">Authorized</span>
-                      <strong className="text-slate-800 dark:text-slate-200">{formatNumber(m.authorizedQuantity)}</strong>
-                    </div>
-                    <div>
-                      <span className="text-[9px] text-slate-500 font-bold uppercase block font-sans">Current / On-Hand</span>
-                      <strong className="text-slate-800 dark:text-slate-200">{formatNumber(m.currentQuantity)}</strong>
-                    </div>
-                    <div>
-                      <span className="text-[9px] text-slate-500 font-bold uppercase block font-sans">Shortage / Excess</span>
-                      <strong className={m.shortageOrExcess < 0 ? 'text-red-600 font-black' : 'text-emerald-600 font-black'}>
-                        {m.shortageOrExcess > 0 ? `+${m.shortageOrExcess}` : m.shortageOrExcess}
-                      </strong>
-                    </div>
+                {/* Mandatory Numerical Quantities Display Strip */}
+                <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 text-center font-mono">
+                  <div className="p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-200/80">
+                    <span className="text-[9px] text-slate-500 font-bold uppercase block font-sans">Authorized</span>
+                    <strong className="text-sm text-slate-900 dark:text-slate-100">{formatNumber(m.authorizedQuantity)}</strong>
+                    <span className="text-[10px] text-slate-400 block font-sans">{m.unitOfIssue}</span>
                   </div>
 
-                  {canEdit ? (
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => handleOpenEditMed(m)}
-                        className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold cursor-pointer"
-                        title="Edit Medicine Details"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
+                  <div className="p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-200/80">
+                    <span className="text-[9px] text-blue-600 font-bold uppercase block font-sans">Held / Base</span>
+                    <strong className="text-sm text-blue-700 dark:text-blue-300">{formatNumber(heldVal)}</strong>
+                    <span className="text-[10px] text-slate-400 block font-sans">{m.unitOfIssue}</span>
+                  </div>
 
-                      <button
-                        onClick={() => handleDeleteMed(m)}
-                        className="p-2 rounded-lg bg-red-100 hover:bg-red-200 dark:bg-red-950/60 dark:hover:bg-red-900 text-red-700 dark:text-red-300 text-xs font-semibold cursor-pointer"
-                        title="Delete / Archive Medicine"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                  <div className="p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-200/80">
+                    <span className="text-[9px] text-indigo-600 font-bold uppercase block font-sans">Received</span>
+                    <strong className="text-sm text-indigo-700 dark:text-indigo-300">+{formatNumber(receivedVal)}</strong>
+                    <span className="text-[10px] text-slate-400 block font-sans">{m.unitOfIssue}</span>
+                  </div>
 
-                      <button
-                        onClick={() => handleOpenIssue(m)}
-                        className="px-3 py-1.5 rounded-lg bg-[#2D4A22] hover:bg-[#3B5E2B] text-white text-xs font-bold shadow flex items-center gap-1 cursor-pointer"
-                      >
-                        <ArrowRight className="w-3.5 h-3.5" />
-                        <span>Issue (FEFO)</span>
-                      </button>
-                    </div>
-                  ) : (
-                    <span className="text-slate-400 font-mono text-[11px] px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded">
-                      View Only
+                  <div className="p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-200/80">
+                    <span className="text-[9px] text-orange-600 font-bold uppercase block font-sans">Issued</span>
+                    <strong className="text-sm text-orange-700 dark:text-orange-300">-{formatNumber(issuedVal)}</strong>
+                    <span className="text-[10px] text-slate-400 block font-sans">{m.unitOfIssue}</span>
+                  </div>
+
+                  {/* Balance Quantity = Held + Received - Issued */}
+                  <div className="p-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border-2 border-emerald-500">
+                    <span className="text-[9px] text-emerald-800 dark:text-emerald-300 font-black uppercase block font-sans">
+                      Balance Qty
                     </span>
-                  )}
+                    <strong className="text-base text-emerald-900 dark:text-emerald-100 font-black">
+                      {formatNumber(balanceVal)}
+                    </strong>
+                    <span className="text-[10px] text-emerald-700 dark:text-emerald-400 block font-sans font-bold">
+                      {m.unitOfIssue}
+                    </span>
+                  </div>
+
+                  <div className="p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-200/80">
+                    <span className="text-[9px] text-slate-500 font-bold uppercase block font-sans">Deficiency/Excess</span>
+                    <strong className={`text-sm ${balanceVal - m.authorizedQuantity < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                      {balanceVal - m.authorizedQuantity > 0 ? `+${balanceVal - m.authorizedQuantity}` : balanceVal - m.authorizedQuantity}
+                    </strong>
+                    <span className="text-[10px] text-slate-400 block font-sans">vs Auth</span>
+                  </div>
                 </div>
-              </div>
 
-              {/* Expiry Overview Strip */}
-              <div className="flex flex-wrap items-center justify-between text-xs p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/60 font-mono">
-                <div>
-                  <span className="text-[10px] text-slate-500 font-sans font-bold">Mandatory Expiry Date (DD-MM-YYYY): </span>
-                  <strong className="text-slate-800 dark:text-white">{formatDateDDMMYYYY(earliestExpiry)}</strong>
-                  <span className="text-slate-500 text-[11px] ml-2">
-                    ({daysRemaining < 0 ? `Expired ${Math.abs(daysRemaining)}d ago` : `${daysRemaining} days remaining`})
-                  </span>
+                {/* Expiry and Dates Row */}
+                <div className="flex flex-wrap items-center justify-between text-xs p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/60 font-mono">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="w-4 h-4 text-slate-400" />
+                    <span className="text-[11px] text-slate-500 font-sans font-bold">Expiry Date:</span>
+                    <strong className="text-slate-800 dark:text-white">{formatDateDDMMYYYY(earliestExpiry)}</strong>
+                    <span className="text-slate-500 text-[11px]">
+                      ({daysRemaining < 0 ? `Expired ${Math.abs(daysRemaining)}d ago` : `${daysRemaining} days remaining`})
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] ${expInfo.badgeStyle}`}>
+                      {expInfo.warningText}
+                    </span>
+                  </div>
                 </div>
 
-                <div>
-                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] ${expInfo.badgeStyle}`}>
-                    {expInfo.warningText}
-                  </span>
-                </div>
-              </div>
-
-              {/* Batch-wise Table */}
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead className="bg-[#F8F9F5] dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 text-[10px] uppercase font-bold">
-                    <tr>
-                      <th className="py-2 px-3">Batch Number</th>
-                      <th className="py-2 px-3">Quantity</th>
-                      <th className="py-2 px-3">Expiry Date (DD-MM-YYYY)</th>
-                      <th className="py-2 px-3">Days Remaining</th>
-                      <th className="py-2 px-3">Expiry Classification & Warning</th>
-                      <th className="py-2 px-3">Rack / Shelf / Bin</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {medBatches.map((b) => {
-                      const days = getDaysRemaining(b.expiryDate);
-                      const batchExpInfo = getExpiryCategoryInfo(b.expiryDate, b.status === 'EXPIRED');
-
-                      return (
-                        <tr key={b.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
-                          <td className="py-2.5 px-3 font-mono font-bold text-slate-800 dark:text-slate-200">
-                            {b.batchNumber}
-                          </td>
-                          <td className="py-2.5 px-3 font-mono font-bold">
-                            {formatNumber(b.currentQuantity)}
-                          </td>
-                          <td className="py-2.5 px-3 font-mono font-semibold">
-                            {formatDateDDMMYYYY(b.expiryDate)}
-                          </td>
-                          <td className="py-2.5 px-3 font-mono font-bold">
-                            {days < 0 ? (
-                              <span className="text-red-500 font-bold">Passed ({Math.abs(days)}d ago)</span>
-                            ) : (
-                              <span>{formatNumber(days)} Days</span>
-                            )}
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] ${batchExpInfo.badgeStyle}`}>
-                              {batchExpInfo.warningText}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3 font-mono text-slate-500 text-[11px]">
-                            {b.rack} / {b.shelf} / {b.bin}
-                          </td>
+                {/* Batches Table */}
+                {medBatches.length > 0 && (
+                  <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-[#F8F9F5] dark:bg-slate-800/60 text-slate-700 dark:text-slate-300 text-[10px] uppercase font-bold">
+                        <tr>
+                          <th className="py-2 px-3">Batch Number</th>
+                          <th className="py-2 px-3">Batch Held Qty</th>
+                          <th className="py-2 px-3">Expiry Date (DD-MM-YYYY)</th>
+                          <th className="py-2 px-3">Days Remaining</th>
+                          <th className="py-2 px-3">Classification</th>
+                          <th className="py-2 px-3">Rack / Shelf / Bin</th>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900">
+                        {medBatches.map((b) => {
+                          const days = getDaysRemaining(b.expiryDate);
+                          const batchExpInfo = getExpiryCategoryInfo(b.expiryDate, b.status === 'EXPIRED');
+
+                          return (
+                            <tr key={b.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                              <td className="py-2 px-3 font-mono font-bold text-slate-800 dark:text-slate-200">
+                                {b.batchNumber}
+                              </td>
+                              <td className="py-2 px-3 font-mono font-bold">
+                                {formatNumber(b.currentQuantity)} {m.unitOfIssue}
+                              </td>
+                              <td className="py-2 px-3 font-mono font-semibold">
+                                {formatDateDDMMYYYY(b.expiryDate)}
+                              </td>
+                              <td className="py-2 px-3 font-mono font-bold">
+                                {days < 0 ? (
+                                  <span className="text-red-500 font-bold">Passed ({Math.abs(days)}d ago)</span>
+                                ) : (
+                                  <span>{formatNumber(days)} Days</span>
+                                )}
+                              </td>
+                              <td className="py-2 px-3">
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] ${batchExpInfo.badgeStyle}`}>
+                                  {batchExpInfo.warningText}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3 font-mono text-slate-500 text-[11px]">
+                                {b.rack} / {b.shelf} / {b.bin}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
       </div>
 
       {/* FEFO Issue Stock Modal */}
       <Modal
         isOpen={isIssueModalOpen}
         onClose={() => setIsIssueModalOpen(false)}
-        title={`Issue Medicine (FEFO Rule): ${selectedMedForIssue?.genericName}`}
-        subtitle="Earliest expiring usable batch is auto-recommended by default"
+        title={`Issue Medicine: ${selectedMedForIssue?.genericName} (${selectedMedForIssue?.strength})`}
+        subtitle="Deducts directly from available balance with automatic FEFO batch selection"
       >
         <form onSubmit={handleExecuteIssue} className="space-y-4">
+          {/* Real-time Balance Box */}
+          {selectedMedForIssue && (
+            <div className="p-3 bg-indigo-50 dark:bg-indigo-950/40 rounded-xl border border-indigo-200 dark:border-indigo-800 flex items-center justify-between">
+              <div>
+                <span className="text-xs font-semibold text-indigo-700 dark:text-indigo-300 block">
+                  Current Balance Quantity:
+                </span>
+                <span className="text-lg font-black font-mono text-indigo-900 dark:text-indigo-100">
+                  {calculateBalance(selectedMedForIssue)} {selectedMedForIssue.unitOfIssue}
+                </span>
+              </div>
+              <div className="text-right">
+                <span className="text-[11px] text-slate-500 block">Unit Form:</span>
+                <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  {selectedMedForIssue.dosageForm} ({selectedMedForIssue.unitOfIssue})
+                </span>
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-              Select Batch (Sorted by Expiry Date) *
+              Select Batch (FEFO - Earliest Expiry Prioritized) *
             </label>
             <select
               value={selectedBatchId}
@@ -885,7 +1285,7 @@ export const MedicineSubModule: React.FC = () => {
                 return (
                   <option key={b.id} value={b.id} disabled={isExp}>
                     {idx === 0 && !isExp ? '★ [EARLIEST EXPIRY] ' : ''}
-                    Batch: {b.batchNumber} | Expiry: {formatDateDDMMYYYY(b.expiryDate)} ({days}d remaining) | Qty: {b.currentQuantity} {isExp ? '[EXPIRED - BLOCKED]' : ''}
+                    Batch: {b.batchNumber} | Exp: {formatDateDDMMYYYY(b.expiryDate)} ({days}d) | Available: {b.currentQuantity} {isExp ? '[EXPIRED - CANNOT ISSUE]' : ''}
                   </option>
                 );
               })}
@@ -902,7 +1302,7 @@ export const MedicineSubModule: React.FC = () => {
               return (
                 <div className="p-3 bg-[#7F1D1D] text-white border border-red-600 rounded-lg text-xs font-bold flex items-center gap-2">
                   <ShieldAlert className="w-5 h-5 flex-shrink-0 text-red-300" />
-                  <span>EXPIRED — DO NOT ISSUE — MOVE TO QUARANTINE</span>
+                  <span>EXPIRED BATCH — DO NOT ISSUE — MOVE TO QUARANTINE</span>
                 </div>
               );
             }
@@ -911,7 +1311,7 @@ export const MedicineSubModule: React.FC = () => {
               return (
                 <div className="p-3 bg-amber-100 text-amber-900 border border-amber-400 rounded-lg text-xs font-bold flex items-center gap-2">
                   <AlertTriangle className="w-5 h-5 flex-shrink-0 text-amber-700" />
-                  <span>WARNING — AN EARLIER-EXPIRY BATCH IS AVAILABLE. VERIFY BEFORE CONTINUING.</span>
+                  <span>WARNING: AN EARLIER-EXPIRING BATCH IS AVAILABLE. FEFO PRINCIPLE APPLIES.</span>
                 </div>
               );
             }
@@ -919,7 +1319,7 @@ export const MedicineSubModule: React.FC = () => {
             return (
               <div className="p-3 bg-emerald-50 text-emerald-900 border border-emerald-300 rounded-lg text-xs font-bold flex items-center gap-2">
                 <CheckCircle className="w-4 h-4 text-emerald-700 flex-shrink-0" />
-                <span>ISSUE THIS BATCH FIRST — EARLIEST EXPIRY</span>
+                <span>FEFO COMPLIANT: Issuing from earliest expiring batch</span>
               </div>
             );
           })()}
@@ -927,42 +1327,94 @@ export const MedicineSubModule: React.FC = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                Issue Quantity ({selectedMedForIssue?.unitOfIssue}) *
+                Quantity to Issue ({selectedMedForIssue?.unitOfIssue}) *
               </label>
               <input
                 type="number"
                 min="1"
+                max={selectedMedForIssue ? calculateBalance(selectedMedForIssue) : 9999}
                 value={issueQty}
                 onChange={(e) => setIssueQty(Number(e.target.value))}
                 className="w-full px-3 py-2 border rounded-lg text-xs font-mono font-bold"
                 required
               />
+              {selectedMedForIssue && (
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Remaining after issue:{' '}
+                  <strong className="text-emerald-700 font-mono">
+                    {Math.max(0, calculateBalance(selectedMedForIssue) - issueQty)} {selectedMedForIssue.unitOfIssue}
+                  </strong>
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                Issue Voucher Reference *
+                Unique Issue ID / Voucher # *
               </label>
               <input
                 type="text"
                 value={voucherRef}
                 onChange={(e) => setVoucherRef(e.target.value)}
-                className="w-full px-3 py-2 border rounded-lg text-xs font-mono"
+                className="w-full px-3 py-2 border rounded-lg text-xs font-mono font-bold text-indigo-700 bg-slate-50"
                 required
               />
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-              Issued to Department / Detachment *
-            </label>
-            <input
-              type="text"
-              value={issuedTo}
-              onChange={(e) => setIssuedTo(e.target.value)}
-              className="w-full px-3 py-2 border rounded-lg text-xs"
-              required
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Recipient / Sub-unit / Department / MI Room / Individual *
+              </label>
+              <input
+                type="text"
+                value={issuedTo}
+                onChange={(e) => setIssuedTo(e.target.value)}
+                placeholder="e.g. MI Room Emergency Bay, Sgt Tariq"
+                className="w-full px-3 py-2 border rounded-lg text-xs"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Place / Location *
+              </label>
+              <input
+                type="text"
+                value={issuePlace}
+                onChange={(e) => setIssuePlace(e.target.value)}
+                placeholder="e.g. Camp Medical Post, Dressing Room"
+                className="w-full px-3 py-2 border rounded-lg text-xs"
+                required
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Issued By *
+              </label>
+              <input
+                type="text"
+                value={issuedByName}
+                onChange={(e) => setIssuedByName(e.target.value)}
+                className="w-full px-3 py-2 border rounded-lg text-xs font-medium"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Issue Date *
+              </label>
+              <input
+                type="date"
+                value={issueDate}
+                onChange={(e) => setIssueDate(e.target.value)}
+                className="w-full px-3 py-2 border rounded-lg text-xs font-mono"
+                required
+              />
+            </div>
           </div>
 
           <div className="flex justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
@@ -975,21 +1427,66 @@ export const MedicineSubModule: React.FC = () => {
             </button>
             <button
               type="submit"
-              disabled={Boolean(selectedBatchId && batches.find(x => x.id === selectedBatchId && (getDaysRemaining(x.expiryDate) < 0 || x.status === 'EXPIRED')))}
-              className="px-4 py-2 rounded-lg bg-[#2D4A22] hover:bg-[#3B5E2B] disabled:bg-slate-400 text-white text-xs font-bold shadow"
+              disabled={
+                Boolean(
+                  selectedBatchId &&
+                  batches.find(
+                    x => x.id === selectedBatchId && (getDaysRemaining(x.expiryDate) < 0 || x.status === 'EXPIRED')
+                  )
+                ) ||
+                !selectedMedForIssue ||
+                issueQty <= 0 ||
+                issueQty > calculateBalance(selectedMedForIssue)
+              }
+              className="px-4 py-2 rounded-lg bg-[#2D4A22] hover:bg-[#3B5E2B] disabled:bg-slate-400 text-white text-xs font-bold shadow transition cursor-pointer"
             >
-              Confirm FEFO Stock Issue
+              Confirm Issue & Deduct Balance
             </button>
           </div>
         </form>
       </Modal>
+
+      {/* Issue Confirmation Modal */}
+      {issueSuccessInfo && (
+        <Modal
+          isOpen={true}
+          onClose={() => setIssueSuccessInfo(null)}
+          title="Medicine Issued Successfully"
+          subtitle="Stock balances updated across local database and cloud ledger"
+        >
+          <div className="space-y-4">
+            <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-900 space-y-2">
+              <div className="flex items-center gap-2 font-bold text-sm">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                Issue Voucher Confirmed
+              </div>
+              <div className="text-xs space-y-1 font-mono">
+                <div>Issue ID: <strong>{issueSuccessInfo.issueId}</strong></div>
+                <div>Medicine: <strong>{issueSuccessInfo.medicineName}</strong></div>
+                <div>Issued Quantity: <strong>{issueSuccessInfo.quantityIssued} {issueSuccessInfo.unit}</strong></div>
+                <div className="text-emerald-800 font-bold pt-1 border-t border-emerald-200">
+                  Updated Balance Quantity: {issueSuccessInfo.remainingBalance} {issueSuccessInfo.unit}
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={() => setIssueSuccessInfo(null)}
+                className="px-4 py-2 bg-slate-800 text-white text-xs font-bold rounded-lg hover:bg-slate-700"
+              >
+                Close Confirmation
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Add / Edit Medicine Modal */}
       <Modal
         isOpen={isMedModalOpen}
         onClose={() => setIsMedModalOpen(false)}
         title={editingMed ? 'Edit Medicine Record' : 'Add New Medicine Item'}
-        subtitle="Medicine scale, authorized quantity, and mandatory expiry date"
+        subtitle="Medicine scale, authorized holdings, and mandatory expiry date"
       >
         <form onSubmit={handleSaveMed} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1031,8 +1528,23 @@ export const MedicineSubModule: React.FC = () => {
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Unit of Issue *</label>
-              <input type="text" value={unitOfIssue} onChange={(e) => setUnitOfIssue(e.target.value)} className="w-full px-2 py-1.5 border rounded text-xs" required />
+              <input type="text" value={unitOfIssue} onChange={(e) => setUnitOfIssue(e.target.value)} placeholder="tablet, vial, ampoule..." className="w-full px-2 py-1.5 border rounded text-xs" required />
             </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Primary Batch # *
+              </label>
+              <input 
+                type="text" 
+                value={batchNumberInput} 
+                onChange={(e) => setBatchNumberInput(e.target.value)} 
+                className="w-full px-2 py-1.5 border rounded text-xs font-mono font-bold" 
+                required 
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                 Expiry Date * (DD-MM-YYYY)
@@ -1045,33 +1557,68 @@ export const MedicineSubModule: React.FC = () => {
                 required 
               />
             </div>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                Authorized Quantity *
+                Authorized Qty *
               </label>
               <input 
                 type="number" 
                 min="0" 
                 value={authQty} 
                 onChange={(e) => setAuthQty(Number(e.target.value))} 
-                className="w-full px-2 py-1.5 border rounded text-xs font-mono font-bold text-emerald-700 dark:text-emerald-400" 
+                className="w-full px-2 py-1.5 border rounded text-xs font-mono font-bold text-slate-800" 
                 required 
               />
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                Current / On-Hand Qty *
+                Held / Base Qty *
               </label>
               <input 
                 type="number" 
                 min="0" 
-                value={currentQty} 
-                onChange={(e) => setCurrentQty(Number(e.target.value))} 
-                className="w-full px-2 py-1.5 border rounded text-xs font-mono font-bold text-blue-700 dark:text-blue-400" 
+                value={heldQty} 
+                onChange={(e) => setHeldQty(Number(e.target.value))} 
+                className="w-full px-2 py-1.5 border rounded text-xs font-mono font-bold text-blue-700" 
                 required 
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Received Qty
+              </label>
+              <input 
+                type="number" 
+                min="0" 
+                value={receivedQty} 
+                onChange={(e) => setReceivedQty(Number(e.target.value))} 
+                className="w-full px-2 py-1.5 border rounded text-xs font-mono font-bold text-indigo-700" 
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Issued Qty
+              </label>
+              <input 
+                type="number" 
+                min="0" 
+                value={issuedQty} 
+                onChange={(e) => setIssuedQty(Number(e.target.value))} 
+                className="w-full px-2 py-1.5 border rounded text-xs font-mono font-bold text-orange-700" 
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Calculated Balance Qty
+              </label>
+              <input 
+                type="text" 
+                disabled 
+                value={Math.max(0, Number(heldQty) + Number(receivedQty) - Number(issuedQty))}
+                className="w-full px-2 py-1.5 border rounded text-xs font-mono font-extrabold bg-emerald-50 text-emerald-900 border-emerald-400" 
               />
             </div>
             <div>
@@ -1081,8 +1628,12 @@ export const MedicineSubModule: React.FC = () => {
               <input 
                 type="text" 
                 disabled 
-                value={currentQty - authQty > 0 ? `+${currentQty - authQty}` : `${currentQty - authQty}`}
-                className="w-full px-2 py-1.5 border rounded text-xs font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300" 
+                value={
+                  Math.max(0, Number(heldQty) + Number(receivedQty) - Number(issuedQty)) - authQty > 0
+                    ? `+${Math.max(0, Number(heldQty) + Number(receivedQty) - Number(issuedQty)) - authQty}`
+                    : `${Math.max(0, Number(heldQty) + Number(receivedQty) - Number(issuedQty)) - authQty}`
+                }
+                className="w-full px-2 py-1.5 border rounded text-xs font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-700" 
               />
             </div>
           </div>
@@ -1130,16 +1681,16 @@ export const MedicineSubModule: React.FC = () => {
         initialField={correctionField}
         initialExistingValue={correctionExistingVal}
         availableFields={[
-          { name: 'Held vs Auth Stock', label: 'Medicine Holdings & Authorized Quantities', currentValue: `Held Total: ${medicines.reduce((s, m) => s + m.currentQuantity, 0)}` },
+          { name: 'Held vs Auth Stock', label: 'Medicine Holdings & Authorized Quantities', currentValue: `Balance Total: ${metrics.totalBalance}` },
           { name: 'Batch Expiry Date', label: 'Batch Expiry & Shelf-Life Classification', currentValue: 'Active Batch Dates' },
           { name: 'Shortage and Excess', label: 'Deficiency / Surplus Variance', currentValue: 'Stock Balance' }
         ]}
         onSuccess={() => {
-          // reload data
-          db.medicines.toArray().then(m => setMedicines(m));
-          db.medicineBatches.toArray().then(b => setBatches(b));
+          loadData();
         }}
       />
     </div>
   );
 };
+
+export default MedicineSubModule;

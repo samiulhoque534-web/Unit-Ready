@@ -123,13 +123,18 @@ export const Header: React.FC<HeaderProps> = ({ activePath, onNavigate }) => {
               )}
             </button>
 
-            {/* Active Appointment Badge */}
-            <div className="flex items-center space-x-2 bg-[#2D4A22] px-2.5 py-1.5 rounded-lg text-xs font-bold border border-[#F59E0B]/50 shadow-xs">
-              <UserCheck className="w-3.5 h-3.5 text-[#F59E0B]" />
+            {/* Active User Identity Profile Display */}
+            <div className="flex items-center space-x-2 bg-[#2D4A22] px-2.5 py-1 rounded-lg text-xs font-bold border border-[#F59E0B]/50 shadow-xs">
+              <UserCheck className="w-3.5 h-3.5 text-[#F59E0B] flex-shrink-0" />
               <div className="text-left hidden sm:block">
-                <p className="text-[11px] leading-tight text-white font-extrabold truncate max-w-[140px]">
-                  {currentUser.appointmentTitle}
+                <p className="text-[11px] leading-tight text-white font-extrabold truncate max-w-[180px]">
+                  {currentUser.rank ? `${currentUser.rank} ` : ''}{currentUser.fullName || currentUser.appointmentTitle}
                 </p>
+                {currentUser.serviceNumber && currentUser.serviceNumber !== 'GEN-VIEW' && (
+                  <p className="text-[9px] text-emerald-300 font-mono font-bold leading-none mt-0.5">
+                    No: {currentUser.serviceNumber}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -174,3 +179,5 @@ export const Header: React.FC<HeaderProps> = ({ activePath, onNavigate }) => {
     </>
   );
 };
+
+export default Header;

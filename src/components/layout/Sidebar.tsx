@@ -5,7 +5,8 @@ import {
   LayoutDashboard, FileText, Bell, Users, 
   Truck, ShieldCheck, Edit3, BarChart3, 
   Settings, Lock, Database, Info, 
-  CalendarCheck, Sliders, X, FolderOpen, Laptop, BookOpen, Key 
+  CalendarCheck, Sliders, X, FolderOpen, Laptop, BookOpen, Key,
+  UserCog
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -49,6 +50,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Administrative / Officer Tools
   const adminNavItems = [
+    { path: '/user-monitoring', label: 'User Monitoring & Audit', icon: UserCog, roles: ['co', 'admin'] },
     { path: '/access-codes', label: 'Access Code Management', icon: Key, roles: ['co', 'admin'] },
     { path: '/admin', label: 'Device Whitelisting', icon: Laptop, roles: ['qm', 'co', 'admin'] },
     { path: '/audit-log', label: t('nav_auditLog') || 'Audit Logs', icon: Lock, roles: ['co', '2ic', 'qm', 'admin', 'auditor'] },
@@ -153,30 +155,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
 
-        {/* User Identity & Security Status Footer */}
-        <div className="p-3 bg-[#172811] border-t border-[#3B5E2B] text-xs">
+        {/* User Identity Footer in Sidebar */}
+        <div className="p-3 border-t border-[#3B5E2B] bg-[#14230E]/60">
           <div className="flex items-center space-x-2">
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="font-mono text-[10px] text-emerald-400 font-bold">AIR-GAPPED INTRANET</span>
+            <div className="w-8 h-8 rounded-lg bg-[#2D4A22] border border-[#4C7536] flex items-center justify-center text-[#F59E0B] font-bold text-xs">
+              {currentUser.rank ? currentUser.rank.slice(0, 3).toUpperCase() : '95'}
+            </div>
+            <div className="text-left overflow-hidden flex-1">
+              <p className="text-xs font-bold text-white truncate">
+                {currentUser.rank ? `${currentUser.rank} ` : ''}{currentUser.fullName || currentUser.appointmentTitle}
+              </p>
+              <p className="text-[10px] text-emerald-400 truncate capitalize font-mono">
+                {currentUser.subUnitCompany || currentUser.appointmentTitle}
+              </p>
+            </div>
           </div>
-          <p className="font-bold text-white mt-1 text-[11px] truncate">
-            {currentUser.appointmentTitle}
-          </p>
-          <p className="text-[10px] text-emerald-300 font-mono">
-            {currentUser.role === 'co' 
-              ? 'Command Authority' 
-              : currentUser.role === '2ic'
-              ? 'Second-in-Command'
-              : currentUser.role === 'moic'
-              ? 'Medical Officer In-Charge'
-              : currentUser.role === 'qm'
-              ? 'Quartermaster'
-              : isViewer
-              ? 'Read-Only View • Permitted Modules'
-              : `Operator: ${currentUser.appointmentTitle}`}
-          </p>
         </div>
       </aside>
     </>
   );
 };
+
+export default Sidebar;

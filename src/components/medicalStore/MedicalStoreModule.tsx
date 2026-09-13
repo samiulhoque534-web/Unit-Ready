@@ -7,17 +7,18 @@ import { MedicineSubModule } from './MedicineSubModule';
 import { InstrumentsSubModule } from './InstrumentsSubModule';
 import { EquipmentSubModule } from './EquipmentSubModule';
 import { MonthlyMedicalAuditSubModule } from './MonthlyMedicalAuditSubModule';
+import { MedicineIssueHistorySubModule } from './MedicineIssueHistorySubModule';
 import { StatusBadge } from '../common/StatusBadge';
 import { 
   Pill, Scissors, Activity, CheckCircle, 
-  AlertCircle, ShieldCheck, Layers, ClipboardCheck 
+  AlertCircle, ShieldCheck, Layers, ClipboardCheck, History
 } from 'lucide-react';
 
 export const MedicalStoreModule: React.FC = () => {
   const { currentUser } = useAuth();
   const { t } = useLanguage();
 
-  const [activeTab, setActiveTab] = useState<'medicine' | 'instruments' | 'equipment' | 'audit'>('medicine');
+  const [activeTab, setActiveTab] = useState<'medicine' | 'instruments' | 'equipment' | 'audit' | 'history'>('medicine');
   const [medApproval, setMedApproval] = useState<SectionApprovalRecord | null>(null);
   const [instApproval, setInstApproval] = useState<SectionApprovalRecord | null>(null);
   const [eqApproval, setEqApproval] = useState<SectionApprovalRecord | null>(null);
@@ -103,10 +104,10 @@ export const MedicalStoreModule: React.FC = () => {
       </div>
 
       {/* Navigation Tabs */}
-      <div className="flex border-b border-slate-200 dark:border-slate-800 space-x-2">
+      <div className="flex border-b border-slate-200 dark:border-slate-800 space-x-2 overflow-x-auto">
         <button
           onClick={() => setActiveTab('medicine')}
-          className={`flex items-center gap-2 py-2.5 px-4 font-bold text-xs border-b-2 transition ${
+          className={`flex items-center gap-2 py-2.5 px-4 font-bold text-xs border-b-2 transition whitespace-nowrap ${
             activeTab === 'medicine'
               ? 'border-[#2D4A22] text-[#2D4A22] dark:border-emerald-400 dark:text-emerald-400 bg-white dark:bg-slate-900 rounded-t-lg'
               : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -117,8 +118,20 @@ export const MedicalStoreModule: React.FC = () => {
         </button>
 
         <button
+          onClick={() => setActiveTab('history')}
+          className={`flex items-center gap-2 py-2.5 px-4 font-bold text-xs border-b-2 transition whitespace-nowrap ${
+            activeTab === 'history'
+              ? 'border-[#2D4A22] text-[#2D4A22] dark:border-emerald-400 dark:text-emerald-400 bg-white dark:bg-slate-900 rounded-t-lg'
+              : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+          }`}
+        >
+          <History className="w-4 h-4" />
+          <span>Medicine Issue History</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('instruments')}
-          className={`flex items-center gap-2 py-2.5 px-4 font-bold text-xs border-b-2 transition ${
+          className={`flex items-center gap-2 py-2.5 px-4 font-bold text-xs border-b-2 transition whitespace-nowrap ${
             activeTab === 'instruments'
               ? 'border-[#2D4A22] text-[#2D4A22] dark:border-emerald-400 dark:text-emerald-400 bg-white dark:bg-slate-900 rounded-t-lg'
               : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -130,7 +143,7 @@ export const MedicalStoreModule: React.FC = () => {
 
         <button
           onClick={() => setActiveTab('equipment')}
-          className={`flex items-center gap-2 py-2.5 px-4 font-bold text-xs border-b-2 transition ${
+          className={`flex items-center gap-2 py-2.5 px-4 font-bold text-xs border-b-2 transition whitespace-nowrap ${
             activeTab === 'equipment'
               ? 'border-[#2D4A22] text-[#2D4A22] dark:border-emerald-400 dark:text-emerald-400 bg-white dark:bg-slate-900 rounded-t-lg'
               : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -142,7 +155,7 @@ export const MedicalStoreModule: React.FC = () => {
 
         <button
           onClick={() => setActiveTab('audit')}
-          className={`flex items-center gap-2 py-2.5 px-4 font-bold text-xs border-b-2 transition ${
+          className={`flex items-center gap-2 py-2.5 px-4 font-bold text-xs border-b-2 transition whitespace-nowrap ${
             activeTab === 'audit'
               ? 'border-[#2D4A22] text-[#2D4A22] dark:border-emerald-400 dark:text-emerald-400 bg-white dark:bg-slate-900 rounded-t-lg'
               : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -155,9 +168,12 @@ export const MedicalStoreModule: React.FC = () => {
 
       {/* Render Active Subsection */}
       {activeTab === 'medicine' && <MedicineSubModule />}
+      {activeTab === 'history' && <MedicineIssueHistorySubModule />}
       {activeTab === 'instruments' && <InstrumentsSubModule />}
       {activeTab === 'equipment' && <EquipmentSubModule />}
       {activeTab === 'audit' && <MonthlyMedicalAuditSubModule />}
     </div>
   );
 };
+
+export default MedicalStoreModule;

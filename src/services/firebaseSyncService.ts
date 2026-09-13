@@ -37,7 +37,10 @@ const SYNC_COLLECTIONS = [
   'sectionApprovals',
   'correctionRequests',
   'notifications',
-  'users'
+  'users',
+  'medicineTransactions',
+  'monthlyMedicalAudits',
+  'userAuditLogs'
 ];
 
 export function initFirebaseSync(): void {

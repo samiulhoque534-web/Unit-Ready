@@ -28,6 +28,7 @@ import { AuditLogModule } from './components/auditLog/AuditLogModule';
 import { BackupRestoreModule } from './components/backupRestore/BackupRestoreModule';
 import { MasterConfigModule } from './components/masterConfig/MasterConfigModule';
 import { AdminModule } from './components/admin/AdminModule';
+import { UserMonitoringModule } from './components/admin/UserMonitoringModule';
 import { SettingsModule } from './components/settings/SettingsModule';
 import { AboutModule } from './components/about/AboutModule';
 import { SmsNotificationToast } from './components/common/SmsNotificationToast';
@@ -78,7 +79,7 @@ const AppContent: React.FC = () => {
 
   const renderActiveModule = () => {
     // Route-level security interlock: block unauthorized direct navigation
-    if (isViewerOrRestricted && ['/approval-centre', '/corrections', '/reports', '/admin', '/backup-restore', '/master-config', '/settings', '/audit-log'].includes(activePath)) {
+    if (isViewerOrRestricted && ['/approval-centre', '/corrections', '/reports', '/admin', '/backup-restore', '/master-config', '/settings', '/audit-log', '/user-monitoring', '/access-codes'].includes(activePath)) {
       return (
         <div className="bg-red-50 dark:bg-red-950/40 border-2 border-red-500 rounded-xl p-8 text-center space-y-4 max-w-xl mx-auto my-12 shadow-lg">
           <div className="w-12 h-12 bg-red-100 dark:bg-red-900/60 rounded-full flex items-center justify-center mx-auto text-red-600 dark:text-red-400 font-black text-xl">
@@ -133,6 +134,8 @@ const AppContent: React.FC = () => {
         return <MasterConfigModule />;
       case '/access-codes':
         return <AdminModule defaultTab="ACCESS_CODES" />;
+      case '/user-monitoring':
+        return <UserMonitoringModule />;
       case '/admin':
         return <AdminModule />;
       case '/settings':
@@ -179,24 +182,23 @@ const AppContent: React.FC = () => {
               <Menu className="w-4 h-4" />
               <span>Navigation Menu</span>
             </button>
-            <span className="font-bold text-xs uppercase text-[#2D4A22] dark:text-emerald-400">
-              95 Fd Amb
+            <span className="text-[10px] font-mono text-slate-500 font-bold uppercase">
+              95 FD AMB
             </span>
           </div>
 
-          <div className="flex-1 max-w-7xl mx-auto w-full">
+          <div className="flex-1">
             {renderActiveModule()}
           </div>
+
+          <Footer />
         </main>
       </div>
-
-      {/* Sticky Bottom Footer */}
-      <Footer />
     </div>
   );
 };
 
-export function App() {
+export const App: React.FC = () => {
   return (
     <ThemeProvider>
       <LanguageProvider>
@@ -208,6 +210,6 @@ export function App() {
       </LanguageProvider>
     </ThemeProvider>
   );
-}
+};
 
 export default App;
