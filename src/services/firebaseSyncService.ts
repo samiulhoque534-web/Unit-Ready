@@ -7,9 +7,13 @@ declare global {
 }
 
 export const FIREBASE_CONFIG = {
-  projectId: "unit-ready-360",
+  apiKey: "AIzaSyBQWoxI545CsYsZeGEwHd8_Ji20CDUHOmo",
   authDomain: "unit-ready-360.firebaseapp.com",
-  storageBucket: "unit-ready-360.firebasestorage.app"
+  projectId: "unit-ready-360",
+  storageBucket: "unit-ready-360.firebasestorage.app",
+  messagingSenderId: "190829560868",
+  appId: "1:190829560868:web:a9cfaec420961bff2344b1",
+  measurementId: "G-DQ7WYPLBFL"
 };
 
 let firestoreInstance: any = null;
