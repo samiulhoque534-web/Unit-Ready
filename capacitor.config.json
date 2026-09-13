@@ -1,0 +1,8 @@
+﻿{
+  "appId": "com.unitready360.app",
+  "appName": "UNIT-READY 360",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}

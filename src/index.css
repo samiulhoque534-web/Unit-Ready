@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Inter', 'Noto Sans Bengali', system-ui, -apple-system, sans-serif;
+  }
+}
+
+/* Custom military scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(30, 51, 22, 0.4);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #3B5E2B;
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #F59E0B;
+}
