@@ -7,7 +7,7 @@ import { EquipmentSubModule } from './EquipmentSubModule';
 import { MonthlyMedicalAuditSubModule } from './MonthlyMedicalAuditSubModule';
 import { MedicineIssueHistorySubModule } from './MedicineIssueHistorySubModule';
 import { 
-  Pill, Scissors, Activity, Layers, History
+  Pill, Scissors, Activity, Layers, History, ClipboardCheck
 } from 'lucide-react';
 
 export const MedicalStoreModule: React.FC = () => {

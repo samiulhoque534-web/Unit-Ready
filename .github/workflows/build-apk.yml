@@ -1,4 +1,4 @@
-﻿name: Build Android APK
+name: Build Android APK
 
 on:
   push:
@@ -37,7 +37,7 @@ jobs:
         run: npm ci || npm install
 
       - name: Build Web Production Assets
-        run: npx vite build
+        run: npm run build
 
       - name: Initialize Capacitor Android
         run: |
