@@ -4,67 +4,50 @@ import { useLanguage } from '../../context/LanguageContext';
 import { db } from '../../db/database';
 import { UserRole, ManpowerPersonnel } from '../../types';
 import { 
-  Shield, Key, Lock, Eye, EyeOff, ArrowRight, 
-  CheckCircle2, User, Award, Hash, AlertCircle, Sparkles, Building,
-  UserPlus, LogIn, ShieldCheck, Check, Clock, UserCheck
+  Shield, Lock, Eye, EyeOff,
+  CheckCircle2, User, Award, Hash, AlertCircle, Building,
+  UserPlus, LogIn, ShieldCheck, Clock, UserCheck
 } from 'lucide-react';
 
 export const LoginScreen: React.FC = () => {
   const { 
-    loginWithIndividualCode,
-    loginGeneralUser,
-    registerGeneralUser
+    loginWithIndividualCredentials,
+    registerIndividualAccount
   } = useAuth();
   const { language } = useLanguage();
 
-  // Mode: 'COMMAND' (CO/2IC/MOIC/QM/Operators) or 'GENERAL' (General Personnel)
-  const [authMode, setAuthMode] = useState<'COMMAND' | 'GENERAL'>('COMMAND');
+  // Active Tab: 'LOGIN' or 'REGISTER'
+  const [activeTab, setActiveTab] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
 
-  // General User Mode: 'LOGIN' or 'REGISTER'
-  const [generalMode, setGeneralMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
+  // Login Form Inputs
+  const [loginBaNumber, setLoginBaNumber] = useState<string>('');
+  const [loginRank, setLoginRank] = useState<string>('');
+  const [loginFullName, setLoginFullName] = useState<string>('');
+  const [loginPin, setLoginPin] = useState<string>('');
+  const [showLoginPin, setShowLoginPin] = useState<boolean>(false);
 
-  // Command Role Selection (Strictly 5 Allowed: CO, 2IC, MOIC, QM, Other Operator)
-  const [selectedRole, setSelectedRole] = useState<'co' | '2ic' | 'moic' | 'qm' | 'other_operator'>('co');
-  
-  // Operator Customization (for 'other_operator')
-  const [operatorType, setOperatorType] = useState<string>('Medicine Store Operator');
-  const [customAppt, setCustomAppt] = useState<string>('Medicine Store Operator');
-  const [personnelIdOrName, setPersonnelIdOrName] = useState<string>('Lt Col Tariqul Anam (BA-5421)');
-
-  // Command Input code
-  const [loginCode, setLoginCode] = useState<string>('');
-  const [showCode, setShowCode] = useState<boolean>(false);
-
-  // General User Login Inputs
-  const [generalArmyNumber, setGeneralArmyNumber] = useState<string>('');
-  const [generalPin, setGeneralPin] = useState<string>('');
-  const [showGeneralPin, setShowGeneralPin] = useState<boolean>(false);
-
-  // General User Registration Inputs
-  const [regArmyNumber, setRegArmyNumber] = useState<string>('');
-  const [regRank, setRegRank] = useState<string>('Soldier / Cpl');
+  // Registration Form Inputs
+  const [regBaNumber, setRegBaNumber] = useState<string>('');
+  const [regRank, setRegRank] = useState<string>('');
   const [regFullName, setRegFullName] = useState<string>('');
-  const [regCompany, setRegCompany] = useState<string>('Alpha Company');
+  const [regCompany, setRegCompany] = useState<string>('HQ Company');
+  const [regRole, setRegRole] = useState<UserRole>('general_personnel');
   const [regPin, setRegPin] = useState<string>('');
   const [regConfirmPin, setRegConfirmPin] = useState<string>('');
-  const [matchedPersonnel, setMatchedPersonnel] = useState<ManpowerPersonnel | null>(null);
+  const [showRegPin, setShowRegPin] = useState<boolean>(false);
 
-  // Status & Rate Limiting
+  // Live Personnel Cross-Check State
+  const [regMatchedPersonnel, setRegMatchedPersonnel] = useState<ManpowerPersonnel | null>(null);
+  const [loginMatchedPersonnel, setLoginMatchedPersonnel] = useState<ManpowerPersonnel | null>(null);
+
+  // Status & Feedback
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [isVerificationPending, setIsVerificationPending] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [failedAttempts, setFailedAttempts] = useState<number>(0);
   const [lockoutSeconds, setLockoutSeconds] = useState<number>(0);
 
-  // Default Profiles Map
-  const roleProfiles: Record<'co' | '2ic' | 'moic' | 'qm' | 'other_operator', { title: string; defaultCode: string; defaultIdName: string }> = {
-    co: { title: 'Commanding Officer (CO)', defaultCode: '951001', defaultIdName: 'Lt Col Tariqul Anam (BA-5421)' },
-    '2ic': { title: 'Second-in-Command (2IC)', defaultCode: '952002', defaultIdName: 'Maj Mahmudur Rahman (BA-6789)' },
-    moic: { title: 'Medical Officer In-Charge (MOIC)', defaultCode: '953003', defaultIdName: 'Maj Dr. Farhana Yesmin (BA-8923)' },
-    qm: { title: 'Quartermaster (QM)', defaultCode: '954004', defaultIdName: 'Maj Asaduzzaman (BA-7812)' },
-    other_operator: { title: 'Medicine Store Operator', defaultCode: '955005', defaultIdName: 'WO Md. Mizanur Rahman (NO-40673)' }
-  };
-
+  // Rate Limiting Timer
   useEffect(() => {
     let timer: any;
     if (lockoutSeconds > 0) {
@@ -75,10 +58,10 @@ export const LoginScreen: React.FC = () => {
     return () => clearInterval(timer);
   }, [lockoutSeconds]);
 
-  // Live Cross-Check of Army Number during Registration
+  // Live Cross-Check for Registration BA Number
   useEffect(() => {
-    const checkManpower = async () => {
-      const clean = regArmyNumber.replace(/\s+/g, '').toUpperCase();
+    const checkRegistrationBa = async () => {
+      const clean = regBaNumber.replace(/\s+/g, '').toUpperCase();
       if (clean.length >= 3) {
         const personnel = await db.manpowerPersonnel.toArray();
         const found = personnel.find(p => {
@@ -86,340 +69,301 @@ export const LoginScreen: React.FC = () => {
           return norm === clean;
         });
         if (found) {
-          setMatchedPersonnel(found);
+          setRegMatchedPersonnel(found);
           if (!regFullName) setRegFullName(found.name);
-          if (!regRank || regRank === 'Soldier / Cpl') setRegRank(found.rank);
+          if (!regRank) setRegRank(found.rank);
         } else {
-          setMatchedPersonnel(null);
+          setRegMatchedPersonnel(null);
         }
       } else {
-        setMatchedPersonnel(null);
+        setRegMatchedPersonnel(null);
       }
     };
-    checkManpower();
-  }, [regArmyNumber]);
+    checkRegistrationBa();
+  }, [regBaNumber]);
 
-  const handleRoleChange = (role: 'co' | '2ic' | 'moic' | 'qm' | 'other_operator') => {
-    setSelectedRole(role);
-    setErrorMessage(null);
-    setSuccessMessage(null);
-    setLoginCode('');
-    setPersonnelIdOrName(roleProfiles[role].defaultIdName);
-  };
+  // Live Cross-Check for Login BA Number
+  useEffect(() => {
+    const checkLoginBa = async () => {
+      const clean = loginBaNumber.replace(/\s+/g, '').toUpperCase();
+      if (clean.length >= 3) {
+        const personnel = await db.manpowerPersonnel.toArray();
+        const found = personnel.find(p => {
+          const norm = (p.baNo || p.personalNumber || '').replace(/\s+/g, '').toUpperCase();
+          return norm === clean;
+        });
+        if (found) {
+          setLoginMatchedPersonnel(found);
+          if (!loginRank) setLoginRank(found.rank);
+          if (!loginFullName) setLoginFullName(found.name);
+        } else {
+          setLoginMatchedPersonnel(null);
+        }
+      } else {
+        setLoginMatchedPersonnel(null);
+      }
+    };
+    checkLoginBa();
+  }, [loginBaNumber]);
 
-  const handleOperatorTypeChange = (type: string) => {
-    setOperatorType(type);
-    setCustomAppt(type);
-    setLoginCode('');
-    if (type === 'Medicine Store Operator') {
-      setPersonnelIdOrName('WO Md. Mizanur Rahman (NO-40673)');
-    } else if (type === 'MT / Vehicle Fleet Operator') {
-      setPersonnelIdOrName('Sgt Kazi Nazmul (NO-30582)');
-    } else if (type === 'Manpower & Parade State Operator') {
-      setPersonnelIdOrName('Sgt Md. Rafiqul Islam (NO-20491)');
-    } else if (type === 'Part-I Duty Roster Operator') {
-      setPersonnelIdOrName('Cpl Shahidul Alam (NO-10293)');
-    } else if (type === 'Medical Instruments & Equipment Operator') {
-      setPersonnelIdOrName('Sgt Jahangir Alam (NO-50764)');
-    }
-  };
-
-  // Submit Command & Operator Login
-  const handleCommandLoginSubmit = async (e: React.FormEvent) => {
+  // Handle Login Submit
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (lockoutSeconds > 0) return;
 
     setErrorMessage(null);
     setSuccessMessage(null);
+    setIsVerificationPending(false);
     setIsSubmitting(true);
 
     try {
-      let roleToUse: UserRole = selectedRole;
-      let apptToUse = roleProfiles[selectedRole].title;
+      const res = await loginWithIndividualCredentials(
+        loginBaNumber,
+        loginRank,
+        loginFullName,
+        loginPin
+      );
 
-      if (selectedRole === 'other_operator') {
-        apptToUse = customAppt || operatorType;
-        if (operatorType.includes('Medicine')) roleToUse = 'medicine_operator';
-        else if (operatorType.includes('Vehicle') || operatorType.includes('MT')) roleToUse = 'vehicle_operator';
-        else if (operatorType.includes('Manpower')) roleToUse = 'manpower_operator';
-        else if (operatorType.includes('Duty')) roleToUse = 'duty_operator';
-        else if (operatorType.includes('Instrument')) roleToUse = 'inst_equip_operator';
-      }
-
-      const res = await loginWithIndividualCode(roleToUse, loginCode, {
-        appointmentTitle: apptToUse,
-        fullName: personnelIdOrName,
-        serviceNumber: personnelIdOrName
-      });
-
-      if (!res.success) {
-        const newFailed = failedAttempts + 1;
-        setFailedAttempts(newFailed);
-        if (newFailed >= 5) {
-          setLockoutSeconds(60);
-          setErrorMessage('Too many failed attempts. Security cooldown active. Please wait 60 seconds.');
-        } else {
-          setErrorMessage(res.message);
-        }
-      } else {
-        setFailedAttempts(0);
+      if (res.success) {
         setSuccessMessage(res.message);
+      } else {
+        if (res.requiresVerification) {
+          setIsVerificationPending(true);
+        }
+        setErrorMessage(res.message);
       }
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Login failed. Please verify credentials.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Submit General User Login
-  const handleGeneralLoginSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (lockoutSeconds > 0) return;
-
-    setErrorMessage(null);
-    setSuccessMessage(null);
-    setIsSubmitting(true);
-
-    try {
-      const res = await loginGeneralUser(generalArmyNumber, generalPin);
-      if (!res.success) {
-        const newFailed = failedAttempts + 1;
-        setFailedAttempts(newFailed);
-        if (newFailed >= 5) {
-          setLockoutSeconds(60);
-          setErrorMessage('Too many failed attempts. Security cooldown active. Please wait 60 seconds.');
-        } else {
-          setErrorMessage(res.message);
-        }
-      } else {
-        setFailedAttempts(0);
-        setSuccessMessage(res.message);
-      }
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // Submit General User Registration
-  const handleGeneralRegisterSubmit = async (e: React.FormEvent) => {
+  // Handle Registration Submit
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
+    setIsVerificationPending(false);
 
     if (regPin !== regConfirmPin) {
-      setErrorMessage('PINs do not match. Please re-enter your PIN accurately.');
+      setErrorMessage('PIN confirmation does not match. Please re-enter.');
       return;
     }
 
     if (regPin.length < 4) {
-      setErrorMessage('PIN must be at least 4 digits long.');
+      setErrorMessage('Security PIN must be at least 4 digits.');
       return;
     }
 
     setIsSubmitting(true);
+
     try {
-      const res = await registerGeneralUser({
-        armyNumber: regArmyNumber,
+      const res = await registerIndividualAccount({
+        baNumber: regBaNumber,
         rank: regRank,
         fullName: regFullName,
         subUnitCompany: regCompany,
+        role: regRole,
         pin: regPin
       });
 
-      if (!res.success) {
-        setErrorMessage(res.message);
-      } else {
+      if (res.success) {
         setSuccessMessage(res.message);
-        setGeneralArmyNumber(regArmyNumber);
-        setGeneralPin(regPin);
-        setGeneralMode('LOGIN');
+        if (res.requiresVerification) {
+          setIsVerificationPending(true);
+        } else {
+          // Pre-populate login form and switch
+          setLoginBaNumber(regBaNumber);
+          setLoginRank(regRank);
+          setLoginFullName(regFullName);
+          setLoginPin(regPin);
+          setTimeout(() => {
+            setActiveTab('LOGIN');
+          }, 1500);
+        }
+      } else {
+        setErrorMessage(res.message);
       }
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Registration failed. Please check your details.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[#14230E] via-[#0E1A09] to-[#14230E] text-white flex flex-col justify-between p-4 sm:p-6 lg:p-8 font-sans selection:bg-[#F59E0B] selection:text-black">
-      {/* Top Unit Banner */}
-      <div className="max-w-4xl w-full mx-auto flex items-center justify-between py-2 border-b border-[#2D4A22]/80">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-[#2D4A22] border border-[#4C7536] flex items-center justify-center text-[#F59E0B] shadow-md font-black text-xs">
-            95 FA
+    <div className="min-h-screen bg-gradient-to-br from-[#0D1809] via-[#14230E] to-[#1D3315] flex flex-col justify-center items-center p-4 font-sans text-white select-none">
+      
+      {/* Background Military Accents */}
+      <div className="fixed inset-0 pointer-events-none opacity-5 overflow-hidden">
+        <div className="absolute -top-24 -right-24 w-96 h-96 rounded-full border-8 border-white" />
+        <div className="absolute top-1/2 left-10 w-80 h-80 rounded-full border border-dashed border-white" />
+        <div className="absolute -bottom-20 right-1/3 w-[500px] h-[500px] rounded-full border border-white" />
+      </div>
+
+      <div className="w-full max-w-lg relative z-10 space-y-5">
+
+        {/* Brand Header */}
+        <div className="text-center space-y-2">
+          <div className="inline-flex items-center justify-center p-3.5 bg-[#1E3316] border-2 border-[#4C7536] rounded-2xl shadow-xl">
+            <ShieldCheck className="w-10 h-10 text-emerald-400" />
           </div>
+
           <div>
-            <h1 className="text-sm sm:text-base font-extrabold tracking-wider text-white uppercase">
-              95 Field Ambulance
+            <h1 className="text-3xl font-black tracking-wider uppercase text-white drop-shadow-md">
+              UNIT-READY
             </h1>
-            <p className="text-[10px] text-emerald-400 font-mono">
-              UNIT-READY • Tactical Command & Medical Store Ledger
+            <p className="text-xs font-bold uppercase tracking-widest text-emerald-400 mt-0.5 font-mono">
+              95 Field Ambulance • Individual Access System
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#1C2E15] border border-[#3B5E2B] text-[10px] text-emerald-300 font-mono">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-            System Online
-          </span>
-        </div>
-      </div>
-
-      {/* Main Authentication Container */}
-      <div className="max-w-lg w-full mx-auto my-auto py-6 space-y-4">
-        {/* Navigation Mode Switcher */}
-        <div className="grid grid-cols-2 gap-2 p-1.5 bg-[#1C2E15] rounded-2xl border border-[#3B5E2B] shadow-lg">
+        {/* Tab Selector: Log In vs Create Account */}
+        <div className="bg-[#1A2E13] p-1.5 rounded-2xl border border-[#3B5E2B] flex shadow-lg">
           <button
             type="button"
             onClick={() => {
-              setAuthMode('COMMAND');
+              setActiveTab('LOGIN');
               setErrorMessage(null);
               setSuccessMessage(null);
+              setIsVerificationPending(false);
             }}
-            className={`py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-2 ${
-              authMode === 'COMMAND'
-                ? 'bg-[#2D4A22] text-[#F59E0B] shadow-md border border-[#4C7536]'
+            className={`flex-1 py-2.5 rounded-xl font-extrabold text-xs tracking-wider uppercase transition flex items-center justify-center gap-2 cursor-pointer ${
+              activeTab === 'LOGIN'
+                ? 'bg-[#2D4A22] text-white shadow-md border border-[#4C7536]'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            <Shield className="w-4 h-4" />
-            <span>Command & Operator</span>
+            <LogIn className="w-4 h-4" />
+            <span>Individual Login</span>
           </button>
 
           <button
             type="button"
             onClick={() => {
-              setAuthMode('GENERAL');
+              setActiveTab('REGISTER');
               setErrorMessage(null);
               setSuccessMessage(null);
+              setIsVerificationPending(false);
             }}
-            className={`py-2.5 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-2 ${
-              authMode === 'GENERAL'
-                ? 'bg-[#2D4A22] text-[#F59E0B] shadow-md border border-[#4C7536]'
+            className={`flex-1 py-2.5 rounded-xl font-extrabold text-xs tracking-wider uppercase transition flex items-center justify-center gap-2 cursor-pointer ${
+              activeTab === 'REGISTER'
+                ? 'bg-[#2D4A22] text-white shadow-md border border-[#4C7536]'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            <User className="w-4 h-4" />
-            <span>General Personnel Access</span>
+            <UserPlus className="w-4 h-4" />
+            <span>Create Account</span>
           </button>
         </div>
 
-        {/* MODE 1: Command & Operator Login */}
-        {authMode === 'COMMAND' && (
-          <div className="bg-[#1C2E15]/90 border border-[#3B5E2B] rounded-2xl p-6 sm:p-8 shadow-2xl space-y-6 backdrop-blur-md">
-            <div>
-              <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                <Shield className="w-5 h-5 text-[#F59E0B]" />
-                Command & Section Access
-              </h2>
-              <p className="text-xs text-slate-400 mt-1">
-                Authorized access for Commanding Officer, 2IC, MOIC, QM and Section Operators
-              </p>
-            </div>
+        {/* Card Container */}
+        <div className="bg-[#1A2E13]/90 backdrop-blur-md rounded-2xl border border-[#3B5E2B] p-6 shadow-2xl space-y-5">
 
-            {/* Role Selection Tabs */}
-            <div>
-              <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
-                Select Authorized Role / Appointment
-              </label>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {(['co', '2ic', 'moic', 'qm', 'other_operator'] as const).map((r) => {
-                  const isSelected = selectedRole === r;
-                  const labelMap: Record<string, string> = {
-                    co: 'CO (Command)',
-                    '2ic': '2IC (Executive)',
-                    moic: 'MOIC (Clinical)',
-                    qm: 'QM (Logistics)',
-                    other_operator: 'Section Operator'
-                  };
-
-                  return (
-                    <button
-                      key={r}
-                      type="button"
-                      onClick={() => handleRoleChange(r)}
-                      className={`p-2.5 rounded-xl border text-left transition flex flex-col justify-between cursor-pointer ${
-                        isSelected
-                          ? 'bg-[#2D4A22] border-[#F59E0B] text-white shadow-md'
-                          : 'bg-[#14230E] border-[#2D4A22] text-slate-300 hover:border-[#4C7536]'
-                      }`}
-                    >
-                      <span className="text-[10px] uppercase font-mono text-emerald-400 font-bold">
-                        {r.toUpperCase()}
-                      </span>
-                      <span className="text-xs font-bold mt-1 line-clamp-1">{labelMap[r]}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Form */}
-            <form onSubmit={handleCommandLoginSubmit} className="space-y-4">
-              {/* Operator Type Selection if 'other_operator' */}
-              {selectedRole === 'other_operator' && (
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
-                    Assigned Operational Section *
-                  </label>
-                  <select
-                    value={operatorType}
-                    onChange={(e) => handleOperatorTypeChange(e.target.value)}
-                    className="w-full px-3 py-2.5 rounded-xl bg-[#14230E] border border-[#3B5E2B] text-white text-xs font-semibold focus:outline-none focus:border-[#F59E0B]"
-                  >
-                    <option value="Medicine Store Operator">Medicine Store Operator (FEFO / Expiry)</option>
-                    <option value="MT / Vehicle Fleet Operator">MT / Vehicle Fleet Operator</option>
-                    <option value="Manpower & Parade State Operator">Manpower & Parade State Operator</option>
-                    <option value="Part-I Duty Roster Operator">Part-I Duty Roster Operator</option>
-                    <option value="Medical Instruments & Equipment Operator">Medical Instruments & Equipment Operator</option>
-                  </select>
-                </div>
-              )}
-
-              {/* Personnel ID / Name */}
+          {/* TAB 1: INDIVIDUAL LOGIN */}
+          {activeTab === 'LOGIN' && (
+            <form onSubmit={handleLoginSubmit} className="space-y-4">
+              
+              {/* Personal BA Number */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
-                  Designated Officer / Operator Identifier
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                  <Hash className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Personal BA Number *</span>
                 </label>
                 <input
                   type="text"
-                  value={personnelIdOrName}
-                  onChange={(e) => setPersonnelIdOrName(e.target.value)}
-                  className="w-full px-3 py-2.5 rounded-xl bg-[#14230E] border border-[#3B5E2B] text-white text-xs font-mono font-medium focus:outline-none focus:border-[#F59E0B]"
+                  value={loginBaNumber}
+                  onChange={(e) => setLoginBaNumber(e.target.value.toUpperCase())}
+                  placeholder="Enter your personal BA Number"
+                  className="w-full px-4 py-2.5 rounded-xl bg-[#14230E] border border-[#3B5E2B] text-white font-mono text-sm uppercase focus:outline-none focus:border-emerald-400"
                   required
                 />
+                {loginMatchedPersonnel && (
+                  <div className="mt-1.5 px-3 py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-500/50 text-emerald-300 text-xs flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span>Roll Match: <strong>{loginMatchedPersonnel.rank} {loginMatchedPersonnel.name}</strong> ({loginMatchedPersonnel.trade})</span>
+                  </div>
+                )}
               </div>
 
-              {/* Enter Individual Access Code */}
+              {/* Rank & Name */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                    <Award className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Rank *</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={loginRank}
+                    onChange={(e) => setLoginRank(e.target.value)}
+                    placeholder="e.g. Lt Col, Maj, Sgt"
+                    className="w-full px-3 py-2 rounded-lg bg-[#14230E] border border-[#3B5E2B] text-white text-xs font-semibold focus:outline-none focus:border-emerald-400"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Full Name *</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={loginFullName}
+                    onChange={(e) => setLoginFullName(e.target.value)}
+                    placeholder="Enter full name"
+                    className="w-full px-3 py-2 rounded-lg bg-[#14230E] border border-[#3B5E2B] text-white text-xs font-semibold focus:outline-none focus:border-emerald-400"
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Personal PIN */}
               <div>
                 <label className="block text-xs font-bold text-slate-200 uppercase tracking-wider mb-1 flex items-center justify-between">
-                  <span className="flex items-center gap-1">
-                    <Lock className="w-3.5 h-3.5 text-[#F59E0B]" />
-                    <span>Enter Individual Access Code *</span>
+                  <span className="flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Personal PIN *</span>
                   </span>
                   <button
                     type="button"
-                    onClick={() => setShowCode(!showCode)}
+                    onClick={() => setShowLoginPin(!showLoginPin)}
                     className="text-[10px] text-slate-300 hover:text-white flex items-center gap-1 cursor-pointer font-mono"
                   >
-                    {showCode ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    <span>{showCode ? 'Hide' : 'Show'}</span>
+                    {showLoginPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    <span>{showLoginPin ? 'Hide' : 'Show'}</span>
                   </button>
                 </label>
                 <input
-                  type={showCode ? 'text' : 'password'}
-                  maxLength={6}
-                  value={loginCode}
-                  onChange={(e) => setLoginCode(e.target.value)}
-                  placeholder="Enter 6-digit access code (e.g. 951001)"
-                  className="w-full px-4 py-3 rounded-xl bg-[#14230E] border-2 border-[#4C7536] text-white font-mono text-center text-lg font-extrabold tracking-widest focus:outline-none focus:border-[#F59E0B] shadow-inner"
+                  type={showLoginPin ? 'text' : 'password'}
+                  value={loginPin}
+                  onChange={(e) => setLoginPin(e.target.value)}
+                  placeholder="Enter personal PIN"
+                  className="w-full px-4 py-3 rounded-xl bg-[#14230E] border-2 border-[#4C7536] text-white font-mono text-center text-lg font-extrabold tracking-widest focus:outline-none focus:border-emerald-400 shadow-inner"
                   required
                 />
               </div>
 
+              {/* Verification Pending Alert Banner */}
+              {isVerificationPending && (
+                <div className="p-3.5 rounded-xl bg-amber-950/80 border border-amber-500 text-amber-200 text-xs space-y-1">
+                  <div className="font-bold flex items-center gap-1.5 text-amber-300">
+                    <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>Identity Verification Pending</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-amber-200/90">
+                    Your details do not match the verified unit personnel database or your account is held for Commanding Officer review. Access will be unlocked upon CO command approval.
+                  </p>
+                </div>
+              )}
+
               {/* Error Message */}
-              {errorMessage && (
+              {errorMessage && !isVerificationPending && (
                 <div className="p-3 rounded-xl bg-red-950/80 border border-red-500 text-red-200 text-xs flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-400" />
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
                   <span>{errorMessage}</span>
                 </div>
               )}
@@ -427,7 +371,7 @@ export const LoginScreen: React.FC = () => {
               {/* Success Message */}
               {successMessage && (
                 <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-500 text-emerald-200 text-xs flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-emerald-400" />
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
                   <span>{successMessage}</span>
                 </div>
               )}
@@ -436,320 +380,258 @@ export const LoginScreen: React.FC = () => {
               <button
                 type="submit"
                 disabled={isSubmitting || lockoutSeconds > 0}
-                className="w-full py-3 rounded-xl bg-[#F59E0B] hover:bg-[#D97706] text-black font-extrabold text-sm tracking-wider uppercase transition shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                className="w-full py-3 rounded-xl bg-[#2D4A22] hover:bg-[#3B5E2B] text-white font-extrabold text-sm tracking-wider uppercase transition shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 border border-[#4C7536]"
               >
-                <Shield className="w-4 h-4" />
+                <LogIn className="w-4 h-4 text-emerald-400" />
                 <span>
-                  {lockoutSeconds > 0 
-                    ? `Locked (${lockoutSeconds}s)` 
-                    : isSubmitting 
-                      ? 'Authenticating...' 
-                      : 'Login to Section'}
+                  {lockoutSeconds > 0
+                    ? `Locked (${lockoutSeconds}s)`
+                    : isSubmitting
+                    ? 'Verifying Identity...'
+                    : 'Log In'}
                 </span>
               </button>
-            </form>
-          </div>
-        )}
 
-        {/* MODE 2: Individual General User Access (Login / Register) */}
-        {authMode === 'GENERAL' && (
-          <div className="bg-[#1C2E15]/90 border border-[#3B5E2B] rounded-2xl p-6 sm:p-8 shadow-2xl space-y-6 backdrop-blur-md">
-            <div className="flex items-center justify-between pb-3 border-b border-[#2D4A22]">
-              <div>
-                <h2 className="text-base font-bold text-white flex items-center gap-2">
-                  <User className="w-5 h-5 text-emerald-400" />
-                  {generalMode === 'LOGIN' ? 'Individual General User Login' : 'General User Account Registration'}
-                </h2>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Army Number & individual PIN authentication cross-checked against unit roll
+              <div className="text-center pt-1">
+                <p className="text-xs text-slate-400">
+                  Need to register a personal account?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('REGISTER');
+                      setErrorMessage(null);
+                      setSuccessMessage(null);
+                      setIsVerificationPending(false);
+                    }}
+                    className="text-[#F59E0B] font-bold hover:underline cursor-pointer"
+                  >
+                    Create Account
+                  </button>
                 </p>
               </div>
+            </form>
+          )}
 
-              {/* Sub-tab toggle */}
-              <div className="flex bg-[#14230E] p-1 rounded-xl border border-[#2D4A22]">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setGeneralMode('LOGIN');
-                    setErrorMessage(null);
-                    setSuccessMessage(null);
-                  }}
-                  className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
-                    generalMode === 'LOGIN' ? 'bg-[#2D4A22] text-[#F59E0B]' : 'text-slate-400'
-                  }`}
-                >
-                  Login
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setGeneralMode('REGISTER');
-                    setErrorMessage(null);
-                    setSuccessMessage(null);
-                  }}
-                  className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
-                    generalMode === 'REGISTER' ? 'bg-[#2D4A22] text-[#F59E0B]' : 'text-slate-400'
-                  }`}
-                >
-                  Register
-                </button>
-              </div>
-            </div>
+          {/* TAB 2: CREATE INDIVIDUAL ACCOUNT */}
+          {activeTab === 'REGISTER' && (
+            <form onSubmit={handleRegisterSubmit} className="space-y-4">
+              
+              {/* Personal BA Number */}
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                  <Hash className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Personal BA Number *</span>
+                </label>
+                <input
+                  type="text"
+                  value={regBaNumber}
+                  onChange={(e) => setRegBaNumber(e.target.value.toUpperCase())}
+                  placeholder="Enter your unique personal BA Number"
+                  className="w-full px-4 py-2.5 rounded-xl bg-[#14230E] border border-[#3B5E2B] text-white font-mono text-sm uppercase focus:outline-none focus:border-emerald-400"
+                  required
+                />
 
-            {/* Sub-form A: General User Login */}
-            {generalMode === 'LOGIN' && (
-              <form onSubmit={handleGeneralLoginSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
-                    Army Number (Personal / BA / NO Number) *
-                  </label>
-                  <input
-                    type="text"
-                    value={generalArmyNumber}
-                    onChange={(e) => setGeneralArmyNumber(e.target.value)}
-                    placeholder="e.g. BA-10492 or NO-30482"
-                    className="w-full px-4 py-2.5 rounded-xl bg-[#14230E] border border-[#3B5E2B] text-white font-mono text-sm focus:outline-none focus:border-emerald-400"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-200 uppercase tracking-wider mb-1 flex items-center justify-between">
-                    <span className="flex items-center gap-1">
-                      <Lock className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Security PIN *</span>
+                {/* Real-time cross-check status */}
+                {regMatchedPersonnel ? (
+                  <div className="mt-1.5 p-2 rounded-lg bg-emerald-950/60 border border-emerald-500 text-emerald-300 text-xs flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>
+                      Found in Personnel Roll: <strong>{regMatchedPersonnel.rank} {regMatchedPersonnel.name}</strong> ({regMatchedPersonnel.trade})
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => setShowGeneralPin(!showGeneralPin)}
-                      className="text-[10px] text-slate-300 hover:text-white flex items-center gap-1 cursor-pointer font-mono"
-                    >
-                      {showGeneralPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                      <span>{showGeneralPin ? 'Hide' : 'Show'}</span>
-                    </button>
-                  </label>
-                  <input
-                    type={showGeneralPin ? 'text' : 'password'}
-                    value={generalPin}
-                    onChange={(e) => setGeneralPin(e.target.value)}
-                    placeholder="Enter your security PIN"
-                    className="w-full px-4 py-3 rounded-xl bg-[#14230E] border-2 border-[#4C7536] text-white font-mono text-center text-lg font-extrabold tracking-widest focus:outline-none focus:border-emerald-400 shadow-inner"
-                    required
-                  />
-                </div>
-
-                {/* Error Message */}
-                {errorMessage && (
-                  <div className="p-3 rounded-xl bg-red-950/80 border border-red-500 text-red-200 text-xs flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-400" />
-                    <span>{errorMessage}</span>
                   </div>
-                )}
-
-                {/* Success Message */}
-                {successMessage && (
-                  <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-500 text-emerald-200 text-xs flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-emerald-400" />
-                    <span>{successMessage}</span>
+                ) : regBaNumber.trim().length >= 3 ? (
+                  <div className="mt-1.5 p-2 rounded-lg bg-amber-950/60 border border-amber-500 text-amber-300 text-xs flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>
+                      Not found in personnel roll snapshot. Account will be held for CO review with <strong>Identity Verification Pending</strong>.
+                    </span>
                   </div>
-                )}
+                ) : null}
+              </div>
 
-                <button
-                  type="submit"
-                  disabled={isSubmitting || lockoutSeconds > 0}
-                  className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm tracking-wider uppercase transition shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-                >
-                  <LogIn className="w-4 h-4" />
-                  <span>
-                    {lockoutSeconds > 0
-                      ? `Locked (${lockoutSeconds}s)`
-                      : isSubmitting
-                      ? 'Authenticating...'
-                      : 'Login as General User'}
-                  </span>
-                </button>
-
-                <div className="text-center pt-2">
-                  <p className="text-xs text-slate-400">
-                    Don't have an individual account?{' '}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setGeneralMode('REGISTER');
-                        setErrorMessage(null);
-                        setSuccessMessage(null);
-                      }}
-                      className="text-[#F59E0B] font-bold hover:underline"
-                    >
-                      Register Now
-                    </button>
-                  </p>
-                </div>
-              </form>
-            )}
-
-            {/* Sub-form B: General User Registration */}
-            {generalMode === 'REGISTER' && (
-              <form onSubmit={handleGeneralRegisterSubmit} className="space-y-4">
+              {/* Rank & Full Name */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
-                    Army Number (BA / NO / Personal Number) *
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                    <Award className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Rank *</span>
                   </label>
                   <input
                     type="text"
-                    value={regArmyNumber}
-                    onChange={(e) => setRegArmyNumber(e.target.value)}
-                    placeholder="e.g. BA-10492 or NO-30482"
-                    className="w-full px-4 py-2.5 rounded-xl bg-[#14230E] border border-[#3B5E2B] text-white font-mono text-sm focus:outline-none focus:border-emerald-400"
+                    value={regRank}
+                    onChange={(e) => setRegRank(e.target.value)}
+                    placeholder="Enter rank"
+                    className="w-full px-3 py-2 rounded-lg bg-[#14230E] border border-[#3B5E2B] text-white text-xs font-semibold focus:outline-none focus:border-emerald-400"
                     required
                   />
-                  {/* Real-time cross check badge */}
-                  {matchedPersonnel ? (
-                    <div className="mt-1.5 p-2 rounded-lg bg-emerald-950/60 border border-emerald-500 text-emerald-300 text-xs flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                      <span>
-                        Verified in unit roll: <strong>{matchedPersonnel.rank} {matchedPersonnel.name}</strong> ({matchedPersonnel.trade})
-                      </span>
-                    </div>
-                  ) : regArmyNumber.trim().length >= 3 ? (
-                    <div className="mt-1.5 p-2 rounded-lg bg-amber-950/60 border border-amber-500 text-amber-300 text-xs flex items-center gap-2">
-                      <Clock className="w-4 h-4 text-amber-400 flex-shrink-0" />
-                      <span>
-                        Not in current unit roll snapshot. Account will require manual CO approval before login.
-                      </span>
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
-                      Rank *
-                    </label>
-                    <input
-                      type="text"
-                      value={regRank}
-                      onChange={(e) => setRegRank(e.target.value)}
-                      placeholder="e.g. Cpl, Sgt, Maj"
-                      className="w-full px-3 py-2 rounded-lg bg-[#14230E] border border-[#3B5E2B] text-white text-xs font-semibold"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
-                      Full Name *
-                    </label>
-                    <input
-                      type="text"
-                      value={regFullName}
-                      onChange={(e) => setRegFullName(e.target.value)}
-                      placeholder="e.g. Md. Rafiqul Islam"
-                      className="w-full px-3 py-2 rounded-lg bg-[#14230E] border border-[#3B5E2B] text-white text-xs font-semibold"
-                      required
-                    />
-                  </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
-                    Sub-Unit / Company *
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Full Name *</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={regFullName}
+                    onChange={(e) => setRegFullName(e.target.value)}
+                    placeholder="Enter full name"
+                    className="w-full px-3 py-2 rounded-lg bg-[#14230E] border border-[#3B5E2B] text-white text-xs font-semibold focus:outline-none focus:border-emerald-400"
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Sub-Unit & Role Selection */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                    <Building className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Sub-Unit / Company</span>
                   </label>
                   <select
                     value={regCompany}
                     onChange={(e) => setRegCompany(e.target.value)}
-                    className="w-full px-3 py-2.5 rounded-xl bg-[#14230E] border border-[#3B5E2B] text-white text-xs font-semibold focus:outline-none focus:border-emerald-400"
+                    className="w-full px-3 py-2 rounded-lg bg-[#14230E] border border-[#3B5E2B] text-white text-xs font-semibold focus:outline-none focus:border-emerald-400"
                   >
                     <option value="HQ Company">HQ Company</option>
-                    <option value="Alpha Company">Alpha Company</option>
-                    <option value="Bravo Company">Bravo Company</option>
-                    <option value="Ambulance Company">Ambulance Company</option>
-                    <option value="Dental Detachment">Dental Detachment</option>
-                    <option value="Medical Store Detachment">Medical Store Detachment</option>
+                    <option value="Medical Company">Medical Company</option>
+                    <option value="A Company">A Company</option>
+                    <option value="MT Platoon">MT Platoon</option>
+                    <option value="EME Section">EME Section</option>
+                    <option value="SMT Trade">SMT Trade</option>
                   </select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
-                      Create PIN (min 4 digits) *
-                    </label>
-                    <input
-                      type="password"
-                      value={regPin}
-                      onChange={(e) => setRegPin(e.target.value)}
-                      placeholder="****"
-                      className="w-full px-3 py-2 rounded-lg bg-[#14230E] border border-[#3B5E2B] text-white font-mono text-center text-base"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
-                      Confirm PIN *
-                    </label>
-                    <input
-                      type="password"
-                      value={regConfirmPin}
-                      onChange={(e) => setRegConfirmPin(e.target.value)}
-                      placeholder="****"
-                      className="w-full px-3 py-2 rounded-lg bg-[#14230E] border border-[#3B5E2B] text-white font-mono text-center text-base"
-                      required
-                    />
-                  </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                    <Shield className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Designated Role</span>
+                  </label>
+                  <select
+                    value={regRole}
+                    onChange={(e) => setRegRole(e.target.value as UserRole)}
+                    className="w-full px-3 py-2 rounded-lg bg-[#14230E] border border-[#3B5E2B] text-white text-xs font-semibold focus:outline-none focus:border-emerald-400"
+                  >
+                    <option value="general_personnel">General Unit Personnel</option>
+                    <option value="medicine_operator">Medicine Store Operator</option>
+                    <option value="vehicle_operator">Vehicle Fleet / MT Operator</option>
+                    <option value="manpower_operator">Manpower / Personnel Operator</option>
+                    <option value="duty_operator">Duty Roster Operator</option>
+                    <option value="inst_equip_operator">Instruments & Equipment Operator</option>
+                    <option value="co">Commanding Officer (CO)</option>
+                    <option value="2ic">Second-in-Command (2IC)</option>
+                    <option value="moic">Medical Officer In-Charge (MOIC)</option>
+                    <option value="qm">Quartermaster (QM)</option>
+                  </select>
                 </div>
+              </div>
 
-                {/* Error Message */}
-                {errorMessage && (
-                  <div className="p-3 rounded-xl bg-red-950/80 border border-red-500 text-red-200 text-xs flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-400" />
-                    <span>{errorMessage}</span>
-                  </div>
-                )}
-
-                {/* Success Message */}
-                {successMessage && (
-                  <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-500 text-emerald-200 text-xs flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-emerald-400" />
-                    <span>{successMessage}</span>
-                  </div>
-                )}
-
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="w-full py-3 rounded-xl bg-[#F59E0B] hover:bg-[#D97706] text-black font-extrabold text-sm tracking-wider uppercase transition shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-                >
-                  <UserPlus className="w-4 h-4" />
-                  <span>{isSubmitting ? 'Registering...' : 'Register Individual Account'}</span>
-                </button>
-
-                <div className="text-center pt-2">
-                  <p className="text-xs text-slate-400">
-                    Already registered?{' '}
+              {/* Security PIN & Confirmation */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-200 uppercase tracking-wider mb-1 flex items-center justify-between">
+                    <span className="flex items-center gap-1">
+                      <Lock className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Set Personal PIN *</span>
+                    </span>
                     <button
                       type="button"
-                      onClick={() => {
-                        setGeneralMode('LOGIN');
-                        setErrorMessage(null);
-                        setSuccessMessage(null);
-                      }}
-                      className="text-emerald-400 font-bold hover:underline"
+                      onClick={() => setShowRegPin(!showRegPin)}
+                      className="text-[10px] text-slate-300 hover:text-white cursor-pointer font-mono"
                     >
-                      Back to Login
+                      {showRegPin ? 'Hide' : 'Show'}
                     </button>
+                  </label>
+                  <input
+                    type={showRegPin ? 'text' : 'password'}
+                    value={regPin}
+                    onChange={(e) => setRegPin(e.target.value)}
+                    placeholder="Min 4 digits"
+                    className="w-full px-3 py-2.5 rounded-lg bg-[#14230E] border border-[#3B5E2B] text-white font-mono text-center text-sm font-bold tracking-widest focus:outline-none focus:border-emerald-400"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-200 uppercase tracking-wider mb-1">
+                    Confirm PIN *
+                  </label>
+                  <input
+                    type={showRegPin ? 'text' : 'password'}
+                    value={regConfirmPin}
+                    onChange={(e) => setRegConfirmPin(e.target.value)}
+                    placeholder="Re-enter PIN"
+                    className="w-full px-3 py-2.5 rounded-lg bg-[#14230E] border border-[#3B5E2B] text-white font-mono text-center text-sm font-bold tracking-widest focus:outline-none focus:border-emerald-400"
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Status Messages */}
+              {errorMessage && (
+                <div className="p-3 rounded-xl bg-red-950/80 border border-red-500 text-red-200 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
+                  <span>{errorMessage}</span>
+                </div>
+              )}
+
+              {successMessage && (
+                <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-500 text-emerald-200 text-xs flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <span>{successMessage}</span>
+                </div>
+              )}
+
+              {/* Verification Notice Warning */}
+              {isVerificationPending && (
+                <div className="p-3.5 rounded-xl bg-amber-950/80 border border-amber-500 text-amber-200 text-xs space-y-1">
+                  <div className="font-bold flex items-center gap-1.5 text-amber-300">
+                    <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>Identity Verification Pending</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-amber-200/90">
+                    Your account registration has been created and submitted. Because your BA Number/details did not match the unit roll or require command review, your account is held for Commanding Officer approval.
                   </p>
                 </div>
-              </form>
-            )}
-          </div>
-        )}
-      </div>
+              )}
 
-      {/* Footer Notice */}
-      <div className="text-center text-[10px] text-emerald-500/70 font-mono py-2">
-        <p>UNIT-READY • 95 FIELD AMBULANCE • INDIVIDUAL IDENTITY VERIFIED LEDGER</p>
+              {/* Submit Registration Button */}
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm tracking-wider uppercase transition shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>{isSubmitting ? 'Registering...' : 'Register Individual Account'}</span>
+              </button>
+
+              <div className="text-center pt-1">
+                <p className="text-xs text-slate-400">
+                  Already have an account?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('LOGIN');
+                      setErrorMessage(null);
+                      setSuccessMessage(null);
+                      setIsVerificationPending(false);
+                    }}
+                    className="text-[#F59E0B] font-bold hover:underline cursor-pointer"
+                  >
+                    Log In
+                  </button>
+                </p>
+              </div>
+            </form>
+          )}
+
+          {/* Security Notice */}
+          <div className="pt-3 border-t border-slate-800/80 text-[10px] text-slate-400 text-center font-mono leading-relaxed">
+            RESTRICTED MILITARY SYSTEM • All login attempts, registrations and activity are cryptographically logged with permanent audit trail.
+          </div>
+        </div>
       </div>
     </div>
   );
 };
-
-export default LoginScreen;

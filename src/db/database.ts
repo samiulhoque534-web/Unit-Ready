@@ -164,7 +164,57 @@ export async function initializeDatabase(): Promise<void> {
         await db.dailySnapshots.bulkPut(initialDailySnapshots);
       }
     }
+
+    // Auto-purge any legacy demo user records from production IndexedDB
+    const demoUserIds = ['usr-co', 'usr-2ic', 'usr-qm', 'usr-moic', 'usr-op-med', 'usr-op-vehicle', 'usr-op-manpower', 'usr-op-duty', 'usr-op-inst', 'usr-viewer'];
+    const allDbUsers = await db.users.toArray();
+    const demoUsersToDelete = allDbUsers.filter(u => 
+      demoUserIds.includes(u.id) || 
+      ['951001', '952002', '953003', '954004', '955005', '956006', '957007', '958008', '959009'].includes(u.loginCode || '') ||
+      (u.fullName && (
+        u.fullName.includes('Tariqul Anam') || 
+        u.fullName.includes('Mahmudur Rahman') || 
+        u.fullName.includes('Farhana Yesmin') || 
+        u.fullName.includes('Asaduzzaman')
+      ))
+    );
+    if (demoUsersToDelete.length > 0) {
+      for (const dUser of demoUsersToDelete) {
+        await db.users.delete(dUser.id);
+      }
+      console.log(`Purged ${demoUsersToDelete.length} legacy demo user account(s) from database.`);
+    }
   } catch (error) {
     console.warn('Database initialization warning (safe to ignore if already populated):', error);
   }
+}
+
+/**
+ * Backend/Database-level Duplicate Prevention for Individual Accounts
+ * Ensures no two accounts can share the same BA / Personal / Army Number.
+ */
+export async function saveUserWithDuplicateCheck(
+  userData: User
+): Promise<{ success: boolean; error?: string; user?: User }> {
+  const normArmy = (userData.armyNumberNormalized || userData.serviceNumber || '').replace(/\s+/g, '').toUpperCase();
+  if (!normArmy) {
+    return { success: false, error: 'Personal BA Number is mandatory.' };
+  }
+
+  // Database-level check across all users
+  const existingUsers = await db.users.toArray();
+  const duplicate = existingUsers.find(u => {
+    const uNorm = (u.armyNumberNormalized || u.serviceNumber || '').replace(/\s+/g, '').toUpperCase();
+    return uNorm === normArmy && u.id !== userData.id;
+  });
+
+  if (duplicate) {
+    return {
+      success: false,
+      error: `Duplicate account prohibited: BA Number "${userData.serviceNumber}" is already registered to an account (${duplicate.rank || ''} ${duplicate.fullName || ''}).`
+    };
+  }
+
+  await db.users.put(userData);
+  return { success: true, user: userData };
 }

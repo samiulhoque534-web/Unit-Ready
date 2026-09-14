@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { db } from '../../db/database';
@@ -30,8 +30,8 @@ export const MedicineIssueHistorySubModule: React.FC = () => {
   const [batchFilter, setBatchFilter] = useState<string>('');
   const [recipientFilter, setRecipientFilter] = useState<string>('');
   const [locationFilter, setLocationFilter] = useState<string>('');
-  const [sortField, setSortField] = useState<'date' | 'qty' | 'name'>('date');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [sortField, setSortField] = useState<'date' | 'qty' | 'name'>('name');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
   // Reversal Modal State
   const [reversingTx, setReversingTx] = useState<MedicineTransaction | null>(null);
@@ -206,7 +206,8 @@ export const MedicineIssueHistorySubModule: React.FC = () => {
   };
 
   const handleExportExcel = () => {
-    const exportRows = filteredTransactions.map(tx => ({
+    const exportRows = filteredTransactions.map((tx, index) => ({
+      'Serial No.': index + 1,
       'Issue ID': tx.issueId || tx.id,
       'Issue Date': tx.issueDate || (tx.transactionTimestamp ? tx.transactionTimestamp.substring(0, 10) : ''),
       'Medicine Name': tx.medicineName,
@@ -448,6 +449,7 @@ export const MedicineIssueHistorySubModule: React.FC = () => {
           <table className="w-full text-left text-xs border-collapse">
             <thead className="bg-[#1E3316] text-white uppercase text-[10px] font-bold tracking-wider">
               <tr>
+                <th className="py-3 px-3 text-center">Serial No.</th>
                 <th className="py-3 px-3">Issue ID</th>
                 <th className="py-3 px-3">Issue Date</th>
                 <th className="py-3 px-3">Medicine Name</th>
@@ -466,12 +468,12 @@ export const MedicineIssueHistorySubModule: React.FC = () => {
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-sans">
               {filteredTransactions.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="py-8 text-center text-slate-500">
+                  <td colSpan={14} className="py-8 text-center text-slate-500">
                     No medicine issue transactions found matching the selected filters.
                   </td>
                 </tr>
               ) : (
-                filteredTransactions.map((tx) => {
+                filteredTransactions.map((tx, index) => {
                   const isRev = tx.isReversed;
                   return (
                     <tr 
@@ -480,6 +482,9 @@ export const MedicineIssueHistorySubModule: React.FC = () => {
                         isRev ? 'bg-red-50/40 dark:bg-red-950/20' : ''
                       }`}
                     >
+                      <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-500 whitespace-nowrap">
+                        {index + 1}
+                      </td>
                       <td className="py-2.5 px-3 font-mono font-bold text-slate-800 dark:text-slate-200 whitespace-nowrap">
                         {tx.issueId || tx.voucherReference || tx.id.slice(0, 12)}
                       </td>

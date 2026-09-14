@@ -179,98 +179,17 @@ export const EquipmentSubModule: React.FC = () => {
     loadData();
   };
 
-  const handleSubmitToMoic = async () => {
-    const nowIso = new Date().toISOString();
-    const appr = await db.sectionApprovals.where('section').equals('med_store_equipment').first();
-    if (appr) {
-      const updatedAppr = {
-        ...appr,
-        status: 'PENDING_MOIC' as const,
-        submittedByAppointment: currentUser.appointmentTitle,
-        submittedAt: nowIso
-      };
-      await db.sectionApprovals.update(appr.id, updatedAppr);
-      await syncEntityToCloud('sectionApprovals', appr.id, updatedAppr);
-    }
-
-    await logAuditEvent(
-      currentUser,
-      'RECORD_SUBMITTED',
-      'med_store_equipment',
-      'EQUIPMENT_STATE',
-      'Submitted Medical Equipment state to MOIC for clinical verification.'
-    );
-
-    loadData();
-    alert('Medical Equipment state submitted to MOIC.');
-  };
-
-  const handleMoicReviewApprove = async () => {
-    const nowIso = new Date().toISOString();
-    const appr = await db.sectionApprovals.where('section').equals('med_store_equipment').first();
-    if (appr) {
-      const updatedAppr = {
-        ...appr,
-        status: 'MOIC_APPROVED' as const,
-        intermediateAppointment: currentUser.appointmentTitle,
-        intermediateDecision: 'APPROVED' as const,
-        intermediateRemarks: 'Verified electro-medical calibration and maintenance logs.',
-        intermediateDecidedAt: nowIso
-      };
-      await db.sectionApprovals.update(appr.id, updatedAppr);
-      await syncEntityToCloud('sectionApprovals', appr.id, updatedAppr);
-    }
-
-    await logAuditEvent(
-      currentUser,
-      'MOIC_APPROVED',
-      'med_store_equipment',
-      'EQUIPMENT_STATE',
-      'MOIC approved Medical Equipment state. Forwarded to CO.'
-    );
-
-    loadData();
-    alert('MOIC review complete. Forwarded to Commanding Officer for final approval.');
-  };
-
-  // CO Command Approval (WITHOUT Locking)
-  const handleCoFinalApprove = async () => {
-    const nowIso = new Date().toISOString();
-    const appr = await db.sectionApprovals.where('section').equals('med_store_equipment').first();
-    if (appr) {
-      const updatedAppr = {
-        ...appr,
-        status: 'CO_APPROVED' as const,
-        coAppointment: currentUser.appointmentTitle,
-        coDecision: 'FINAL_APPROVED' as const,
-        coRemarks: 'Commanding Officer approval granted. Equipment register remains active & editable.',
-        coDecidedAt: nowIso
-      };
-      await db.sectionApprovals.update(appr.id, updatedAppr);
-      await syncEntityToCloud('sectionApprovals', appr.id, updatedAppr);
-    }
-
-    await logAuditEvent(
-      currentUser,
-      'CO_APPROVED',
-      'med_store_equipment',
-      'EQUIPMENT_STATE',
-      'Commanding Officer approved Medical Equipment register.'
-    );
-
-    loadData();
-    alert('COMMAND APPROVAL GRANTED: Medical Equipment register approved by Commanding Officer.');
-  };
-
   const totalHeld = equipmentList.reduce((sum, e) => sum + e.heldQuantity, 0);
   const totalSvc = equipmentList.filter(e => e.currentStatus === 'SERVICEABLE').reduce((sum, e) => sum + e.heldQuantity, 0);
   const serviceabilityRate = totalHeld > 0 ? ((totalSvc / totalHeld) * 100).toFixed(1) : '100.0';
 
-  const filteredEquipment = equipmentList.filter(e =>
-    e.equipmentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    e.serialNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    e.makeModel.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredEquipment = equipmentList
+    .filter(e =>
+      e.equipmentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      e.serialNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      e.makeModel.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+    .sort((a, b) => a.equipmentName.localeCompare(b.equipmentName));
 
   const canEdit = currentUser.role === 'inst_equip_operator' || currentUser.role === 'moic' || currentUser.role === 'co' || currentUser.role === '2ic' || currentUser.role === 'other_operator' || currentUser.role === 'admin';
 
@@ -304,12 +223,14 @@ export const EquipmentSubModule: React.FC = () => {
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Serviceability Rate: <strong className="text-emerald-600 font-mono">{serviceabilityRate}%</strong> | MOIC Review → CO Final Approval.
+            Serviceability Rate: <strong className="text-emerald-600 font-mono">{serviceabilityRate}%</strong>
           </p>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          {approvalRecord && <StatusBadge status={approvalRecord.status} />}
+          <div className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono font-bold text-slate-700 dark:text-slate-200">
+            Total Equipment Items: <strong className="text-emerald-600 dark:text-emerald-400">{equipmentList.length}</strong>
+          </div>
 
           {canEdit && (
             <button
@@ -321,39 +242,6 @@ export const EquipmentSubModule: React.FC = () => {
               <span>Add Equipment</span>
             </button>
           )}
-
-          {canEdit && approvalRecord?.status === 'DRAFT' && (
-            <button
-              type="button"
-              onClick={handleSubmitToMoic}
-              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow transition flex items-center gap-1.5 cursor-pointer"
-            >
-              <Send className="w-3.5 h-3.5" />
-              <span>Submit to MOIC</span>
-            </button>
-          )}
-
-          {approvalRecord?.status === 'PENDING_MOIC' && (currentUser.role === 'moic' || currentUser.role === 'admin') && (
-            <button
-              type="button"
-              onClick={handleMoicReviewApprove}
-              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow transition flex items-center gap-1.5 cursor-pointer"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              <span>MOIC Approve & Forward to CO</span>
-            </button>
-          )}
-
-          {(currentUser.role === 'co' || currentUser.role === 'admin') && (
-            <button
-              type="button"
-              onClick={handleCoFinalApprove}
-              className="px-3.5 py-2 rounded-xl bg-[#F59E0B] hover:bg-[#D97706] text-black font-extrabold text-xs shadow transition flex items-center gap-1.5 cursor-pointer"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              <span>CO Command Approval</span>
-            </button>
-          )}
         </div>
       </div>
 
@@ -363,6 +251,7 @@ export const EquipmentSubModule: React.FC = () => {
           <table className="w-full text-left text-xs border-collapse">
             <thead className="bg-[#1E3316] text-white uppercase text-[11px] font-semibold">
               <tr>
+                <th className="py-3 px-3 text-center">Serial No.</th>
                 <th className="py-3 px-4">Equipment Name</th>
                 <th className="py-3 px-4">Make / Model</th>
                 <th className="py-3 px-4">Serial Number</th>
@@ -376,10 +265,13 @@ export const EquipmentSubModule: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-              {filteredEquipment.map((item) => {
+              {filteredEquipment.map((item, index) => {
                 const diff = (item.heldQuantity || 0) - (item.authorizedQuantity || 0);
                 return (
                   <tr key={item.id} className="hover:bg-[#F8F9F5] dark:hover:bg-slate-800/50 transition">
+                    <td className="py-3 px-3 text-center font-mono font-bold text-slate-500">
+                      {index + 1}
+                    </td>
                     <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">
                       {item.equipmentName}
                     </td>

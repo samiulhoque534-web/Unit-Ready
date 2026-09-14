@@ -297,90 +297,6 @@ export const MedicineSubModule: React.FC = () => {
   }, [medicines, batches]);
 
   // Submit Medicine State to MOIC
-  const handleSubmitToMoic = async () => {
-    const nowIso = new Date().toISOString();
-    const appr = await db.sectionApprovals.where('section').equals('med_store_medicine').first();
-    if (appr) {
-      const updated = {
-        ...appr,
-        status: 'PENDING_MOIC' as const,
-        submittedByAppointment: currentUser.appointmentTitle,
-        submittedAt: nowIso
-      };
-      await db.sectionApprovals.update(appr.id, updated);
-      await syncEntityToCloud('sectionApprovals', appr.id, updated);
-    }
-
-    await logAuditEvent(
-      currentUser,
-      'RECORD_SUBMITTED',
-      'med_store_medicine',
-      'MEDICINE_STORE_STATE',
-      'Submitted Medicine Store inventory and expiry register to MOIC for clinical verification.'
-    );
-
-    loadData();
-    alert('Medicine Store state submitted to MOIC for review.');
-  };
-
-  // MOIC Review Action
-  const handleMoicReviewApprove = async () => {
-    const nowIso = new Date().toISOString();
-    const appr = await db.sectionApprovals.where('section').equals('med_store_medicine').first();
-    if (appr) {
-      const updated = {
-        ...appr,
-        status: 'MOIC_APPROVED' as const,
-        intermediateAppointment: currentUser.appointmentTitle,
-        intermediateDecision: 'APPROVED' as const,
-        intermediateRemarks: 'Verified all medicine expiry dates, FEFO batches, and quarantine vault.',
-        intermediateDecidedAt: nowIso
-      };
-      await db.sectionApprovals.update(appr.id, updated);
-      await syncEntityToCloud('sectionApprovals', appr.id, updated);
-    }
-
-    await logAuditEvent(
-      currentUser,
-      'MOIC_APPROVED',
-      'med_store_medicine',
-      'MEDICINE_STORE_STATE',
-      'MOIC approved Medicine Store state. Forwarded to Commanding Officer for command approval.'
-    );
-
-    loadData();
-    alert('MOIC verification complete. Forwarded to Commanding Officer for final approval.');
-  };
-
-  // CO Command Approval (WITHOUT Locking)
-  const handleCoFinalApprove = async () => {
-    const nowIso = new Date().toISOString();
-    const appr = await db.sectionApprovals.where('section').equals('med_store_medicine').first();
-    if (appr) {
-      const updated = {
-        ...appr,
-        status: 'CO_APPROVED' as const,
-        coAppointment: currentUser.appointmentTitle,
-        coDecision: 'FINAL_APPROVED' as const,
-        coRemarks: 'Commanding Officer approval granted. Stock register remains active & editable by authorized operators.',
-        coDecidedAt: nowIso
-      };
-      await db.sectionApprovals.update(appr.id, updated);
-      await syncEntityToCloud('sectionApprovals', appr.id, updated);
-    }
-
-    await logAuditEvent(
-      currentUser,
-      'CO_APPROVED',
-      'med_store_medicine',
-      'MEDICINE_STORE_STATE',
-      'Commanding Officer granted command approval for Medicine Store.'
-    );
-
-    loadData();
-    alert('COMMAND APPROVAL GRANTED: Medicine Store state has received Commanding Officer approval.');
-  };
-
   // FEFO Issue Modal Trigger
   const handleOpenIssue = (med: MedicineItem) => {
     const balance = calculateBalance(med);
@@ -778,21 +694,23 @@ export const MedicineSubModule: React.FC = () => {
     loadData();
   };
 
-  const filteredMedicines = medicines.filter(m => {
-    const matchesSearch = 
-      m.genericName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (m.brandName && m.brandName.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      m.strength.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (m.batchNumber && m.batchNumber.toLowerCase().includes(searchQuery.toLowerCase()));
-    if (!matchesSearch) return false;
+  const filteredMedicines = medicines
+    .filter(m => {
+      const matchesSearch = 
+        m.genericName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (m.brandName && m.brandName.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        m.strength.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (m.batchNumber && m.batchNumber.toLowerCase().includes(searchQuery.toLowerCase()));
+      if (!matchesSearch) return false;
 
-    if (stockStatusFilter === 'ALL') return true;
+      if (stockStatusFilter === 'ALL') return true;
 
-    const medBatches = getBatchesForMed(m.id);
-    const earliestExp = m.expiryDate || (medBatches.length > 0 ? medBatches[0].expiryDate : '');
-    const status = getMedicineStockStatus(m, earliestExp);
-    return status === stockStatusFilter;
-  });
+      const medBatches = getBatchesForMed(m.id);
+      const earliestExp = m.expiryDate || (medBatches.length > 0 ? medBatches[0].expiryDate : '');
+      const status = getMedicineStockStatus(m, earliestExp);
+      return status === stockStatusFilter;
+    })
+    .sort((a, b) => a.genericName.localeCompare(b.genericName));
 
   const canEdit = currentUser.role === 'medicine_operator' || currentUser.role === 'moic' || currentUser.role === 'co' || currentUser.role === '2ic' || currentUser.role === 'other_operator' || currentUser.role === 'admin';
 
@@ -960,8 +878,13 @@ export const MedicineSubModule: React.FC = () => {
           />
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
-          {approvalRecord && <StatusBadge status={approvalRecord.status} />}
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Distinct Types vs Total Balance Quantity Display */}
+          <div className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono font-bold text-slate-700 dark:text-slate-200 shadow-xs flex items-center gap-2">
+            <span>Total Medicine Types: <strong className="text-emerald-600 dark:text-emerald-400 font-black">{medicines.length}</strong></span>
+            <span className="text-slate-300 dark:text-slate-600">|</span>
+            <span>Total Quantity: <strong className="text-emerald-600 dark:text-emerald-400 font-black">{formatNumber(metrics.totalBalance)}</strong></span>
+          </div>
 
           {/* Issue Medicine Action Button */}
           {canEdit && (
@@ -993,39 +916,6 @@ export const MedicineSubModule: React.FC = () => {
               <span>Add Medicine</span>
             </button>
           )}
-
-          {/* Submit to MOIC */}
-          {canEdit && approvalRecord?.status === 'DRAFT' && (
-            <button
-              onClick={handleSubmitToMoic}
-              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow transition flex items-center gap-1.5 cursor-pointer"
-            >
-              <Send className="w-3.5 h-3.5" />
-              <span>Submit to MOIC</span>
-            </button>
-          )}
-
-          {/* MOIC Review Button */}
-          {approvalRecord?.status === 'PENDING_MOIC' && (currentUser.role === 'moic' || currentUser.role === 'admin') && (
-            <button
-              onClick={handleMoicReviewApprove}
-              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow transition flex items-center gap-1.5 cursor-pointer"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              <span>MOIC Approve & Forward to CO</span>
-            </button>
-          )}
-
-          {/* CO Command Approval Button */}
-          {(currentUser.role === 'co' || currentUser.role === 'admin') && (
-            <button
-              onClick={handleCoFinalApprove}
-              className="px-3.5 py-2 rounded-xl bg-[#F59E0B] hover:bg-[#D97706] text-black font-extrabold text-xs shadow transition flex items-center gap-1.5 cursor-pointer"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              <span>CO Command Approval</span>
-            </button>
-          )}
         </div>
       </div>
 
@@ -1036,7 +926,7 @@ export const MedicineSubModule: React.FC = () => {
             No medicine items matched your search query or status filter.
           </div>
         ) : (
-          filteredMedicines.map((m) => {
+          filteredMedicines.map((m, index) => {
             const medBatches = getBatchesForMed(m.id);
             const earliestExpiry = m.expiryDate || (medBatches.length > 0 ? medBatches[0].expiryDate : '');
             const daysRemaining = getDaysRemaining(earliestExpiry);
@@ -1060,6 +950,9 @@ export const MedicineSubModule: React.FC = () => {
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
+                      <span className="bg-[#1E3316] text-white font-mono font-black text-xs px-2.5 py-1 rounded shadow-xs">
+                        Serial No. {index + 1}
+                      </span>
                       <h3 className="font-extrabold text-base text-slate-900 dark:text-white">
                         {m.genericName}
                       </h3>

@@ -225,10 +225,11 @@ export const UserMonitoringModule: React.FC = () => {
           </span>
         );
       case 'PENDING':
+      case 'PENDING_VERIFICATION':
         return (
           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300">
             <Clock className="w-3.5 h-3.5 mr-1 text-amber-600" />
-            Pending Approval
+            Pending Verification
           </span>
         );
       case 'SUSPENDED':
@@ -266,7 +267,7 @@ export const UserMonitoringModule: React.FC = () => {
               </div>
               <div>
                 <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-                  User Identity & Login Monitoring Dashboard
+                  User Identity and Login Monitoring
                 </h1>
                 <p className="text-sm text-slate-300 mt-0.5">
                   Commanding Officer & Administrator Control Centre for Individual General User Verification & Audit
@@ -390,95 +391,81 @@ export const UserMonitoringModule: React.FC = () => {
             <table className="w-full text-left border-collapse text-sm">
               <thead className="bg-slate-100 text-slate-700 uppercase font-semibold text-xs border-b border-gray-200">
                 <tr>
-                  <th className="py-3 px-4">Army Number</th>
-                  <th className="py-3 px-4">Rank & Full Name</th>
-                  <th className="py-3 px-4">Role / Appt</th>
-                  <th className="py-3 px-4">Sub-Unit / Co</th>
-                  <th className="py-3 px-4">Database Check</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Registered</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
+                  <th className="py-3 px-3">BA Number</th>
+                  <th className="py-3 px-3">Rank</th>
+                  <th className="py-3 px-3">Name</th>
+                  <th className="py-3 px-3">Company/Sub-unit</th>
+                  <th className="py-3 px-3">Role</th>
+                  <th className="py-3 px-3">Account Status</th>
+                  <th className="py-3 px-3">Registration Date</th>
+                  <th className="py-3 px-3">Last Login Date & Time</th>
+                  <th className="py-3 px-3">Last Activity Date & Time</th>
+                  <th className="py-3 px-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 bg-white">
                 {filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-gray-500">
+                    <td colSpan={10} className="py-8 text-center text-gray-500">
                       No users match the selected filters.
                     </td>
                   </tr>
                 ) : (
                   filteredUsers.map(u => {
-                    const normArmy = (u.serviceNumber || '').replace(/\s+/g, '').toUpperCase();
-                    const matchedPersonnel = personnelMap.get(normArmy);
-                    const isVerified = u.identityVerified || !!matchedPersonnel;
-
                     return (
-                      <tr key={u.id} className="hover:bg-slate-50 transition">
-                        <td className="py-3.5 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">
+                      <tr key={u.id} className="hover:bg-slate-50 transition text-xs">
+                        <td className="py-3 px-3 font-mono font-bold text-slate-900 whitespace-nowrap">
                           {u.serviceNumber}
                         </td>
-                        <td className="py-3.5 px-4 whitespace-nowrap">
-                          <div className="font-semibold text-gray-900">
-                            {u.rank ? `${u.rank} ` : ''}{u.fullName || '—'}
-                          </div>
-                          {matchedPersonnel && (
-                            <div className="text-xs text-emerald-600 font-medium">
-                              Match: {matchedPersonnel.name} ({matchedPersonnel.trade})
-                            </div>
-                          )}
+                        <td className="py-3 px-3 font-semibold text-slate-800 whitespace-nowrap">
+                          {u.rank || '—'}
                         </td>
-                        <td className="py-3.5 px-4 whitespace-nowrap text-gray-700">
-                          <div className="font-medium">{u.appointmentTitle || u.role}</div>
-                          <div className="text-xs text-gray-500 capitalize">{u.role.replace(/_/g, ' ')}</div>
+                        <td className="py-3 px-3 whitespace-nowrap font-bold text-slate-900">
+                          {u.fullName || '—'}
                         </td>
-                        <td className="py-3.5 px-4 whitespace-nowrap text-gray-700">
-                          {u.subUnitCompany || 'HQ / Unspecified'}
+                        <td className="py-3 px-3 whitespace-nowrap text-gray-700">
+                          {u.subUnitCompany || 'HQ Company'}
                         </td>
-                        <td className="py-3.5 px-4 whitespace-nowrap">
-                          {isVerified ? (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              <CheckCircle2 className="w-3.5 h-3.5 mr-1 text-emerald-500" />
-                              Cross-checked
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-                              <AlertCircle className="w-3.5 h-3.5 mr-1 text-amber-500" />
-                              Unmatched (Manual)
-                            </span>
-                          )}
+                        <td className="py-3 px-3 whitespace-nowrap text-gray-700 font-medium">
+                          {u.appointmentTitle || u.role}
                         </td>
-                        <td className="py-3.5 px-4 whitespace-nowrap">
+                        <td className="py-3 px-3 whitespace-nowrap">
                           {getStatusBadge(u)}
                         </td>
-                        <td className="py-3.5 px-4 whitespace-nowrap text-xs text-gray-500">
+                        <td className="py-3 px-3 whitespace-nowrap text-gray-500 font-mono text-[11px]">
                           {u.registrationDate ? new Date(u.registrationDate).toLocaleDateString() : '—'}
                         </td>
-                        <td className="py-3.5 px-4 whitespace-nowrap text-right space-x-1">
+                        <td className="py-3 px-3 whitespace-nowrap text-gray-500 font-mono text-[11px]">
+                          {u.lastLoginAt && u.lastLoginAt !== 'Never logged in' ? new Date(u.lastLoginAt).toLocaleString() : 'Never logged in'}
+                        </td>
+                        <td className="py-3 px-3 whitespace-nowrap text-gray-500 font-mono text-[11px]">
+                          {u.lastActivityAt ? new Date(u.lastActivityAt).toLocaleString() : (u.lastLoginAt && u.lastLoginAt !== 'Never logged in' ? new Date(u.lastLoginAt).toLocaleString() : '—')}
+                        </td>
+                        <td className="py-3 px-3 whitespace-nowrap text-right space-x-1">
                           <button
                             onClick={() => setSelectedUser(u)}
-                            className="p-1.5 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded"
-                            title="View Details & Login Activity"
+                            className="p-1.5 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded"
+                            title="View User Login History & Audit Details"
                           >
-                            <Eye className="w-4 h-4" />
+                            <History className="w-4 h-4 inline" />
                           </button>
 
                           {/* Quick Approval / Actions for CO */}
-                          {(!u.accountStatus || u.accountStatus === 'PENDING') && (
+                          {(!u.accountStatus || u.accountStatus === 'PENDING' || u.accountStatus === 'PENDING_VERIFICATION') && (
                             <>
                               <button
                                 onClick={() => setActionUser({ user: u, action: 'APPROVE' })}
                                 className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded"
-                                title="Approve Account"
+                                title="Approve User"
                               >
-                                <CheckCircle2 className="w-4 h-4" />
+                                <CheckCircle2 className="w-4 h-4 inline" />
                               </button>
                               <button
                                 onClick={() => setActionUser({ user: u, action: 'REJECT' })}
                                 className="p-1.5 text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded"
-                                title="Reject Account"
+                                title="Reject User"
                               >
-                                <XCircle className="w-4 h-4" />
+                                <XCircle className="w-4 h-4 inline" />
                               </button>
                             </>
                           )}
@@ -489,7 +476,7 @@ export const UserMonitoringModule: React.FC = () => {
                               className="p-1.5 text-orange-600 hover:text-orange-700 hover:bg-orange-50 rounded"
                               title="Suspend User"
                             >
-                              <Lock className="w-4 h-4" />
+                              <Lock className="w-4 h-4 inline" />
                             </button>
                           )}
 
@@ -499,17 +486,17 @@ export const UserMonitoringModule: React.FC = () => {
                               className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded"
                               title="Reactivate User"
                             >
-                              <Unlock className="w-4 h-4" />
+                              <Unlock className="w-4 h-4 inline" />
                             </button>
                           )}
 
-                          {u.accountStatus !== 'DEACTIVATED' && u.accountStatus !== 'PENDING' && (
+                          {u.accountStatus !== 'DEACTIVATED' && u.accountStatus !== 'PENDING' && u.accountStatus !== 'PENDING_VERIFICATION' && (
                             <button
                               onClick={() => setActionUser({ user: u, action: 'DEACTIVATE' })}
                               className="p-1.5 text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded"
-                              title="Deactivate Account"
+                              title="Deactivate User"
                             >
-                              <UserX className="w-4 h-4" />
+                              <UserX className="w-4 h-4 inline" />
                             </button>
                           )}
                         </td>

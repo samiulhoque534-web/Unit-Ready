@@ -110,6 +110,7 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
       });
     });
 
+    items.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     setAuditItems(items);
     setIsCreateModalOpen(true);
   };
@@ -436,8 +437,10 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
     doc.setTextColor(30, 51, 22);
     doc.text('1. PHYSICAL RECONCILIATION SUMMARY', margin, 54);
 
-    // Table mapping
-    const rows = audit.items.map(item => [
+    // Table mapping - sort items alphabetically A-Z
+    const sortedItems = [...audit.items].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const rows = sortedItems.map((item, idx) => [
+      String(idx + 1),
       item.itemType,
       item.name,
       item.batchOrSerial,
@@ -455,33 +458,34 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
     autoTable(doc, {
       startY: 58,
       margin: { left: margin, right: margin },
-      head: [['Type', 'Item Name', 'Batch/Ser', 'Expiry', 'Auth', 'Held', 'Count', 'Diff', 'Remarks']],
+      head: [['SL', 'Type', 'Item Name', 'Batch/Ser', 'Expiry', 'Auth', 'Held', 'Count', 'Diff', 'Remarks']],
       body: rows,
       theme: 'grid',
       headStyles: {
         fillColor: [45, 74, 34],
         textColor: 255,
         fontStyle: 'bold',
-        fontSize: 10, // Adjusted to fit A4 columns while maintaining relative boldness
+        fontSize: 9.5, // Adjusted to fit A4 columns while maintaining relative boldness
         halign: 'center',
         cellPadding: 2.5
       },
       styles: {
-        fontSize: 9,
+        fontSize: 8.5,
         cellPadding: 2,
         textColor: 30,
         overflow: 'linebreak'
       },
       columnStyles: {
-        0: { cellWidth: 20 },
-        1: { cellWidth: 42, fontStyle: 'bold' },
-        2: { cellWidth: 22 },
+        0: { cellWidth: 10, halign: 'center' },
+        1: { cellWidth: 18 },
+        2: { cellWidth: 40, fontStyle: 'bold' },
         3: { cellWidth: 20 },
-        4: { cellWidth: 14, halign: 'center' },
-        5: { cellWidth: 14, halign: 'center' },
-        6: { cellWidth: 14, halign: 'center', fontStyle: 'bold' },
-        7: { cellWidth: 14, halign: 'center', fontStyle: 'bold' },
-        8: { cellWidth: 'auto' }
+        4: { cellWidth: 18 },
+        5: { cellWidth: 13, halign: 'center' },
+        6: { cellWidth: 13, halign: 'center' },
+        7: { cellWidth: 13, halign: 'center', fontStyle: 'bold' },
+        8: { cellWidth: 13, halign: 'center', fontStyle: 'bold' },
+        9: { cellWidth: 'auto' }
       }
     });
 
@@ -587,7 +591,9 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
   };
 
   const exportAuditExcel = (audit: MonthlyMedicalAuditReport) => {
-    const data = audit.items.map(item => ({
+    const sortedItems = [...audit.items].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const data = sortedItems.map((item, idx) => ({
+      'Serial No.': idx + 1,
       'Unit': '95 Fd Amb',
       'Audit Month': audit.auditMonth,
       'Item Type': item.itemType,
@@ -918,6 +924,7 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
             <table className="w-full text-left text-xs border-collapse">
               <thead className="bg-[#1E3316] text-white uppercase text-[10px] font-semibold sticky top-0">
                 <tr>
+                  <th className="py-2.5 px-3 text-center">Serial No.</th>
                   <th className="py-2.5 px-3">Type</th>
                   <th className="py-2.5 px-3">Item Nomenclature</th>
                   <th className="py-2.5 px-3">Spec / Batch / Serial</th>
@@ -930,8 +937,11 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-sans">
-                {auditItems.map((item) => (
+                {auditItems.map((item, index) => (
                   <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                    <td className="py-2 px-3 text-center font-mono font-bold text-slate-500">
+                      {index + 1}
+                    </td>
                     <td className="py-2 px-3 font-mono font-bold text-[10px] text-slate-500">
                       {item.itemType}
                     </td>
@@ -1077,6 +1087,7 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
             <table className="w-full text-left text-xs border-collapse">
               <thead className="bg-[#1E3316] text-white uppercase text-[10px] font-semibold sticky top-0">
                 <tr>
+                  <th className="py-2 px-3 text-center">Serial No.</th>
                   <th className="py-2 px-3">Type</th>
                   <th className="py-2 px-3">Item Name</th>
                   <th className="py-2 px-3">Spec / Batch</th>
@@ -1089,8 +1100,9 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                {selectedAudit?.items.map((item) => (
+                {[...(selectedAudit?.items || [])].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((item, index) => (
                   <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                    <td className="py-2 px-3 text-center font-mono font-bold text-slate-500">{index + 1}</td>
                     <td className="py-2 px-3 font-mono font-bold text-[10px] text-slate-500">{item.itemType}</td>
                     <td className="py-2 px-3 font-bold text-slate-900 dark:text-white">{item.name}</td>
                     <td className="py-2 px-3 font-mono text-[11px]">{item.batchOrSerial}</td>

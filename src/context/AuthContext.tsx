@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, Device, UserRole, UserAuditLogEntry, ManpowerPersonnel } from '../types';
 import { initialUsers, initialDevices } from '../db/seedData';
-import { db } from '../db/database';
+import { db, saveUserWithDuplicateCheck } from '../db/database';
 import { logAuditEvent } from '../services/auditService';
 import { verifyUserLoginCode, syncEntityToCloud } from '../services/firebaseSyncService';
 
@@ -18,6 +18,25 @@ interface AuthContextType {
   activeDevice: Device;
   isDeviceAuthorized: boolean;
   isLoggedIn: boolean;
+  loginWithIndividualCredentials: (
+    baNumber: string,
+    rank: string,
+    fullName: string,
+    pin: string
+  ) => Promise<{ success: boolean; message: string; requiresVerification?: boolean }>;
+  registerIndividualAccount: (data: {
+    baNumber: string;
+    rank: string;
+    fullName: string;
+    subUnitCompany?: string;
+    role?: UserRole;
+    appointmentTitle?: string;
+    pin: string;
+  }) => Promise<{ success: boolean; message: string; user?: User; requiresVerification?: boolean }>;
+  updateUserIdentityDetails: (
+    userId: string,
+    updates: { rank?: string; fullName?: string; serviceNumber?: string }
+  ) => Promise<{ success: boolean; message: string }>;
   loginWithIndividualCode: (
     role: UserRole,
     loginCode: string,
@@ -96,6 +115,352 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
     syncUser();
   }, [savedUserRole, savedUserId]);
+
+  /**
+   * Strict Individual Login System
+   * Every user logs in individually using:
+   * - Personal BA Number
+   * - Rank
+   * - Name
+   * - Personal PIN
+   * Cross-checks against personnel database:
+   * If BA Number, Rank and Name match: active login.
+   * If mismatch: holds for CO review with "Identity Verification Pending".
+   */
+  const loginWithIndividualCredentials = async (
+    baNumber: string,
+    rank: string,
+    fullName: string,
+    pin: string
+  ): Promise<{ success: boolean; message: string; requiresVerification?: boolean }> => {
+    const rawBa = (baNumber || '').trim();
+    const cleanRank = (rank || '').trim();
+    const cleanName = (fullName || '').trim();
+    const cleanPin = (pin || '').trim();
+
+    if (!rawBa || !cleanPin) {
+      return { success: false, message: 'Please enter both your BA Number and personal PIN.' };
+    }
+
+    const normalizedBa = rawBa.replace(/\s+/g, '').toUpperCase();
+    const allUsers = await db.users.toArray();
+    const user = allUsers.find(u => {
+      const uNorm = (u.armyNumberNormalized || u.serviceNumber || '').replace(/\s+/g, '').toUpperCase();
+      return uNorm === normalizedBa;
+    });
+
+    if (!user) {
+      if (db.userAuditLogs) {
+        await db.userAuditLogs.add({
+          id: `LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          armyNumber: rawBa,
+          rank: cleanRank,
+          name: cleanName,
+          timestamp: new Date().toISOString(),
+          actionType: 'FAILED_LOGIN',
+          performedBy: 'System',
+          details: `Login attempt failed: BA Number "${rawBa}" is not registered.`
+        });
+      }
+      return { success: false, message: `BA Number "${rawBa}" is not registered. Please create an account first.` };
+    }
+
+    // Verify PIN
+    const isValidPin = user.pin === cleanPin || user.loginCode === cleanPin;
+    if (!isValidPin) {
+      if (db.userAuditLogs) {
+        await db.userAuditLogs.add({
+          id: `LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          armyNumber: user.serviceNumber,
+          rank: user.rank,
+          name: user.fullName,
+          userId: user.id,
+          timestamp: new Date().toISOString(),
+          actionType: 'FAILED_LOGIN',
+          performedBy: 'System',
+          details: 'Incorrect PIN entered.'
+        });
+      }
+      return { success: false, message: 'Invalid PIN entered. Please check your personal PIN.' };
+    }
+
+    // Cross-check against Manpower Personnel database
+    const personnel = await db.manpowerPersonnel.toArray();
+    const matchedPersonnel = personnel.find(p => {
+      const pNorm = (p.baNo || p.personalNumber || '').replace(/\s+/g, '').toUpperCase();
+      return pNorm === normalizedBa;
+    });
+
+    // Check rank and name match if provided
+    let hasMismatch = false;
+    if (matchedPersonnel) {
+      if (cleanRank && !matchedPersonnel.rank.toLowerCase().includes(cleanRank.toLowerCase()) && !cleanRank.toLowerCase().includes(matchedPersonnel.rank.toLowerCase())) {
+        hasMismatch = true;
+      }
+      if (cleanName && !matchedPersonnel.name.toLowerCase().includes(cleanName.toLowerCase()) && !cleanName.toLowerCase().includes(matchedPersonnel.name.toLowerCase())) {
+        hasMismatch = true;
+      }
+    } else if (user.role !== 'co') {
+      hasMismatch = true;
+    }
+
+    // Check Account Status & Verification
+    if (user.accountStatus === 'PENDING' || user.accountStatus === 'PENDING_VERIFICATION' || hasMismatch) {
+      return {
+        success: false,
+        requiresVerification: true,
+        message: 'Identity Verification Pending: Your account credentials must be verified by the Commanding Officer (CO) before login access is granted.'
+      };
+    }
+
+    if (user.accountStatus === 'SUSPENDED') {
+      return {
+        success: false,
+        message: 'Account Suspended: Your access has been suspended by the Commanding Officer.'
+      };
+    }
+
+    if (user.accountStatus === 'DEACTIVATED' || user.isActive === false) {
+      return {
+        success: false,
+        message: 'Account Deactivated: Contact the Commanding Officer for reactivation.'
+      };
+    }
+
+    if (user.accountStatus === 'REJECTED') {
+      return {
+        success: false,
+        message: 'Account Registration Rejected by Commanding Officer.'
+      };
+    }
+
+    // Successful login
+    const nowIso = new Date().toISOString();
+    await db.users.update(user.id, {
+      lastLoginAt: nowIso,
+      lastActivityAt: nowIso
+    });
+
+    const activeUser: User = {
+      ...user,
+      lastLoginAt: nowIso,
+      lastActivityAt: nowIso
+    };
+
+    setCurrentUser(activeUser);
+    setIsLoggedIn(true);
+    setIsDeviceAuthorized(true);
+    localStorage.setItem('95fa_user_role', activeUser.role);
+    localStorage.setItem('95fa_user_id', activeUser.id);
+    localStorage.setItem('95fa_is_logged_in', 'true');
+
+    if (db.userAuditLogs) {
+      await db.userAuditLogs.add({
+        id: `LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        armyNumber: user.serviceNumber,
+        rank: user.rank,
+        name: user.fullName,
+        userId: user.id,
+        timestamp: nowIso,
+        actionType: 'LOGIN',
+        performedBy: 'User',
+        details: `Individual login verified: ${user.serviceNumber} (${user.rank || ''} ${user.fullName})`
+      });
+    }
+
+    await logAuditEvent(
+      activeUser,
+      'LOGIN_SUCCESS',
+      'auth',
+      activeUser.appointmentTitle,
+      `Individual user logged in: ${activeUser.serviceNumber} (${activeUser.fullName}).`
+    );
+
+    return {
+      success: true,
+      message: `Welcome, ${activeUser.rank ? activeUser.rank + ' ' : ''}${activeUser.fullName || activeUser.appointmentTitle}. Login verified.`
+    };
+  };
+
+  /**
+   * Individual User Registration with Database-level Duplicate Check & Personnel Cross-Check
+   */
+  const registerIndividualAccount = async (data: {
+    baNumber: string;
+    rank: string;
+    fullName: string;
+    subUnitCompany?: string;
+    role?: UserRole;
+    appointmentTitle?: string;
+    pin: string;
+  }): Promise<{ success: boolean; message: string; user?: User; requiresVerification?: boolean }> => {
+    const rawBa = (data.baNumber || '').trim();
+    if (!rawBa) {
+      return { success: false, message: 'Personal BA Number is mandatory.' };
+    }
+    const cleanRank = (data.rank || '').trim();
+    const cleanName = (data.fullName || '').trim();
+    if (!cleanRank || !cleanName) {
+      return { success: false, message: 'Rank and Full Name are mandatory.' };
+    }
+    const cleanPin = (data.pin || '').trim();
+    if (!cleanPin || cleanPin.length < 4) {
+      return { success: false, message: 'Please set a secure personal PIN (at least 4 digits).' };
+    }
+
+    const normalizedBa = rawBa.replace(/\s+/g, '').toUpperCase();
+
+    // 1. Backend Database-level Duplicate Prevention Check
+    const allUsers = await db.users.toArray();
+    const duplicate = allUsers.find(u => {
+      const uNorm = (u.armyNumberNormalized || u.serviceNumber || '').replace(/\s+/g, '').toUpperCase();
+      return uNorm === normalizedBa;
+    });
+
+    if (duplicate) {
+      return {
+        success: false,
+        message: `Duplicate account prohibited: BA Number "${rawBa}" is already registered to an existing account.`
+      };
+    }
+
+    // 2. Cross-check against Manpower Personnel Database
+    const personnel = await db.manpowerPersonnel.toArray();
+    const matchedPersonnel = personnel.find(p => {
+      const pNorm = (p.baNo || p.personalNumber || '').replace(/\s+/g, '').toUpperCase();
+      return pNorm === normalizedBa;
+    });
+
+    let isMatch = false;
+    if (matchedPersonnel) {
+      const rankMatch = matchedPersonnel.rank.toLowerCase().includes(cleanRank.toLowerCase()) || 
+                         cleanRank.toLowerCase().includes(matchedPersonnel.rank.toLowerCase());
+      const nameMatch = matchedPersonnel.name.toLowerCase().includes(cleanName.toLowerCase()) || 
+                         cleanName.toLowerCase().includes(matchedPersonnel.name.toLowerCase());
+      if (rankMatch && nameMatch) {
+        isMatch = true;
+      }
+    }
+
+    // Initial Unit Commanding Officer Bootstrap check if database is empty
+    const isFirstCoBootstrap = allUsers.length === 0 && (data.role === 'co' || cleanRank.toLowerCase().includes('col'));
+
+    const isVerified = isMatch || isFirstCoBootstrap;
+    const accountStatus: 'ACTIVE' | 'PENDING_VERIFICATION' = isVerified ? 'ACTIVE' : 'PENDING_VERIFICATION';
+    const verificationNotes = isMatch
+      ? `Verified match against unit manpower roll (${matchedPersonnel?.trade || 'Personnel'}, Appt: ${matchedPersonnel?.appointment || 'N/A'})`
+      : isFirstCoBootstrap
+      ? 'Initial Unit Commanding Officer Command Bootstrap'
+      : matchedPersonnel
+      ? 'Mismatched Rank/Name against personnel database record. Held for CO review.'
+      : 'BA Number not found in unit personnel database roll. Held for CO review.';
+
+    const nowIso = new Date().toISOString();
+    const resolvedRole: UserRole = data.role || (cleanRank.toLowerCase().includes('col') ? 'co' : cleanRank.toLowerCase().includes('maj') ? '2ic' : 'general_personnel');
+    const resolvedAppt = data.appointmentTitle || `${cleanRank} ${cleanName}`;
+
+    const newUser: User = {
+      id: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      serviceNumber: rawBa,
+      armyNumberNormalized: normalizedBa,
+      rank: cleanRank,
+      fullName: cleanName,
+      subUnitCompany: data.subUnitCompany || 'HQ Company',
+      appointmentTitle: resolvedAppt,
+      role: resolvedRole,
+      sectionAssigned: 'all',
+      accountStatus: accountStatus,
+      registrationDate: nowIso,
+      identityVerified: isVerified,
+      verificationNotes: verificationNotes,
+      failedLoginAttempts: 0,
+      isActive: accountStatus === 'ACTIVE',
+      userStatus: accountStatus === 'ACTIVE' ? 'ACTIVE' : 'DEACTIVATED',
+      loginCode: cleanPin,
+      pin: cleanPin,
+      lastLoginAt: 'Never logged in'
+    };
+
+    // Save with Database-level duplicate check
+    const saveResult = await saveUserWithDuplicateCheck(newUser);
+    if (!saveResult.success) {
+      return { success: false, message: saveResult.error || 'Duplicate account detected at database level.' };
+    }
+
+    await syncEntityToCloud('users', newUser.id, newUser);
+
+    // Audit log
+    if (db.userAuditLogs) {
+      await db.userAuditLogs.add({
+        id: `LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        armyNumber: rawBa,
+        rank: cleanRank,
+        name: cleanName,
+        userId: newUser.id,
+        timestamp: nowIso,
+        actionType: 'REGISTRATION',
+        performedBy: 'User',
+        details: `Account registration for ${rawBa}. Personnel match: ${isMatch ? 'YES' : 'NO'}. Status: ${accountStatus}. Notes: ${verificationNotes}`
+      });
+    }
+
+    return {
+      success: true,
+      user: newUser,
+      requiresVerification: !isVerified,
+      message: isVerified
+        ? `Account verified against unit personnel database. You can now log in.`
+        : `Identity Verification Pending: Your account has been registered and is held for Commanding Officer (CO) review and approval.`
+    };
+  };
+
+  /**
+   * User Identity Modification with Mandatory CO Authorization
+   * Once verified, users cannot modify BA Number, Rank or Name on their own.
+   */
+  const updateUserIdentityDetails = async (
+    userId: string,
+    updates: { rank?: string; fullName?: string; serviceNumber?: string }
+  ): Promise<{ success: boolean; message: string }> => {
+    if (currentUser.role !== 'co' && currentUser.role !== 'admin') {
+      return {
+        success: false,
+        message: 'Once verified, BA Number, Rank, and Name cannot be modified independently. Commanding Officer (CO) or Admin approval is strictly required.'
+      };
+    }
+
+    const userToEdit = await db.users.get(userId);
+    if (!userToEdit) return { success: false, message: 'User not found.' };
+
+    const updatedUser: User = {
+      ...userToEdit,
+      rank: updates.rank || userToEdit.rank,
+      fullName: updates.fullName || userToEdit.fullName,
+      serviceNumber: updates.serviceNumber || userToEdit.serviceNumber,
+      armyNumberNormalized: updates.serviceNumber ? updates.serviceNumber.replace(/\s+/g, '').toUpperCase() : userToEdit.armyNumberNormalized,
+      lastEditedBy: currentUser.appointmentTitle,
+      lastEditedAt: new Date().toISOString()
+    };
+
+    await db.users.put(updatedUser);
+    await syncEntityToCloud('users', userId, updatedUser);
+
+    if (db.userAuditLogs) {
+      await db.userAuditLogs.add({
+        id: `LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        armyNumber: updatedUser.serviceNumber,
+        rank: updatedUser.rank,
+        name: updatedUser.fullName,
+        userId: updatedUser.id,
+        timestamp: new Date().toISOString(),
+        actionType: 'APPROVAL',
+        performedBy: currentUser.appointmentTitle,
+        details: `Commanding Officer authorized identity details change for ${updatedUser.serviceNumber}.`
+      });
+    }
+
+    return { success: true, message: 'User identity details updated successfully with CO authorization.' };
+  };
 
   /**
    * Secure Individual Login with Unique Generated Access Code (CO, 2IC, MOIC, QM, Operators)
@@ -699,6 +1064,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         activeDevice,
         isDeviceAuthorized,
         isLoggedIn,
+        loginWithIndividualCredentials,
+        registerIndividualAccount,
+        updateUserIdentityDetails,
         loginWithIndividualCode,
         loginGeneralUser,
         registerGeneralUser,

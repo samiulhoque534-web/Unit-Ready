@@ -181,93 +181,12 @@ export const InstrumentsSubModule: React.FC = () => {
     loadData();
   };
 
-  const handleSubmitToMoic = async () => {
-    const nowIso = new Date().toISOString();
-    const appr = await db.sectionApprovals.where('section').equals('med_store_instruments').first();
-    if (appr) {
-      const updatedAppr = {
-        ...appr,
-        status: 'PENDING_MOIC' as const,
-        submittedByAppointment: currentUser.appointmentTitle,
-        submittedAt: nowIso
-      };
-      await db.sectionApprovals.update(appr.id, updatedAppr);
-      await syncEntityToCloud('sectionApprovals', appr.id, updatedAppr);
-    }
-
-    await logAuditEvent(
-      currentUser,
-      'RECORD_SUBMITTED',
-      'med_store_instruments',
-      'INSTRUMENTS_STATE',
-      'Submitted Medical Instruments state to MOIC for verification.'
-    );
-
-    loadData();
-    alert('Medical Instruments state submitted to MOIC.');
-  };
-
-  const handleMoicReviewApprove = async () => {
-    const nowIso = new Date().toISOString();
-    const appr = await db.sectionApprovals.where('section').equals('med_store_instruments').first();
-    if (appr) {
-      const updatedAppr = {
-        ...appr,
-        status: 'MOIC_APPROVED' as const,
-        intermediateAppointment: currentUser.appointmentTitle,
-        intermediateDecision: 'APPROVED' as const,
-        intermediateRemarks: 'Verified sterilization logs and set completeness.',
-        intermediateDecidedAt: nowIso
-      };
-      await db.sectionApprovals.update(appr.id, updatedAppr);
-      await syncEntityToCloud('sectionApprovals', appr.id, updatedAppr);
-    }
-
-    await logAuditEvent(
-      currentUser,
-      'MOIC_APPROVED',
-      'med_store_instruments',
-      'INSTRUMENTS_STATE',
-      'MOIC approved Medical Instruments state. Forwarded to CO.'
-    );
-
-    loadData();
-    alert('MOIC verification complete. Forwarded to Commanding Officer.');
-  };
-
-  // CO Command Approval (WITHOUT Locking)
-  const handleCoFinalApprove = async () => {
-    const nowIso = new Date().toISOString();
-    const appr = await db.sectionApprovals.where('section').equals('med_store_instruments').first();
-    if (appr) {
-      const updatedAppr = {
-        ...appr,
-        status: 'CO_APPROVED' as const,
-        coAppointment: currentUser.appointmentTitle,
-        coDecision: 'FINAL_APPROVED' as const,
-        coRemarks: 'Commanding Officer approval granted. Records remain editable by authorized personnel.',
-        coDecidedAt: nowIso
-      };
-      await db.sectionApprovals.update(appr.id, updatedAppr);
-      await syncEntityToCloud('sectionApprovals', appr.id, updatedAppr);
-    }
-
-    await logAuditEvent(
-      currentUser,
-      'CO_APPROVED',
-      'med_store_instruments',
-      'INSTRUMENTS_STATE',
-      'Commanding Officer approved Medical Instruments register.'
-    );
-
-    loadData();
-    alert('COMMAND APPROVAL GRANTED: Medical Instruments register approved by Commanding Officer.');
-  };
-
-  const filteredInstruments = instruments.filter(i => 
-    i.instrumentSetName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    i.responsibleAppointment.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredInstruments = instruments
+    .filter(i => 
+      i.instrumentSetName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      i.responsibleAppointment.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+    .sort((a, b) => a.instrumentSetName.localeCompare(b.instrumentSetName));
 
   const canEdit = currentUser.role === 'inst_equip_operator' || currentUser.role === 'moic' || currentUser.role === 'co' || currentUser.role === '2ic' || currentUser.role === 'other_operator' || currentUser.role === 'admin';
 
@@ -301,12 +220,14 @@ export const InstrumentsSubModule: React.FC = () => {
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Holding Equation: Held = Serviceable + Unserviceable + Under Repair | MOIC Review → CO Final Approval.
+            Holding Equation: Held = Serviceable + Unserviceable + Under Repair
           </p>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          {approvalRecord && <StatusBadge status={approvalRecord.status} />}
+          <div className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-mono font-bold text-slate-700 dark:text-slate-200">
+            Total Instrument Sets: <strong className="text-emerald-600 dark:text-emerald-400">{instruments.length}</strong>
+          </div>
 
           {canEdit && (
             <button
@@ -318,39 +239,6 @@ export const InstrumentsSubModule: React.FC = () => {
               <span>Add Instrument Set</span>
             </button>
           )}
-
-          {canEdit && approvalRecord?.status === 'DRAFT' && (
-            <button
-              type="button"
-              onClick={handleSubmitToMoic}
-              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow transition flex items-center gap-1.5 cursor-pointer"
-            >
-              <Send className="w-3.5 h-3.5" />
-              <span>Submit to MOIC</span>
-            </button>
-          )}
-
-          {approvalRecord?.status === 'PENDING_MOIC' && (currentUser.role === 'moic' || currentUser.role === 'admin') && (
-            <button
-              type="button"
-              onClick={handleMoicReviewApprove}
-              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow transition flex items-center gap-1.5 cursor-pointer"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              <span>MOIC Approve & Forward to CO</span>
-            </button>
-          )}
-
-          {(currentUser.role === 'co' || currentUser.role === 'admin') && (
-            <button
-              type="button"
-              onClick={handleCoFinalApprove}
-              className="px-3.5 py-2 rounded-xl bg-[#F59E0B] hover:bg-[#D97706] text-black font-extrabold text-xs shadow transition flex items-center gap-1.5 cursor-pointer"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              <span>CO Command Approval</span>
-            </button>
-          )}
         </div>
       </div>
 
@@ -360,6 +248,7 @@ export const InstrumentsSubModule: React.FC = () => {
           <table className="w-full text-left text-xs border-collapse">
             <thead className="bg-[#1E3316] text-white uppercase text-[11px] font-semibold">
               <tr>
+                <th className="py-3 px-3 text-center">Serial No.</th>
                 <th className="py-3 px-4">Instrument / Set Name</th>
                 <th className="py-3 px-4 text-center">Auth</th>
                 <th className="py-3 px-4 text-center">Held / Current</th>
@@ -372,10 +261,13 @@ export const InstrumentsSubModule: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-              {filteredInstruments.map((item) => {
+              {filteredInstruments.map((item, index) => {
                 const diff = (item.heldQty || 0) - (item.authorizedQty || 0);
                 return (
                   <tr key={item.id} className="hover:bg-[#F8F9F5] dark:hover:bg-slate-800/50 transition">
+                    <td className="py-3 px-3 text-center font-mono font-bold text-slate-500">
+                      {index + 1}
+                    </td>
                     <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">
                       {item.instrumentSetName}
                     </td>

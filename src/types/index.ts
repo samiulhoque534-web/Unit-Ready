@@ -107,7 +107,7 @@ export interface User {
   failedLoginAttempts: number;
   lockoutUntil?: string | null;
   isActive: boolean;
-  accountStatus?: 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'DEACTIVATED';
+  accountStatus?: 'PENDING' | 'PENDING_VERIFICATION' | 'ACTIVE' | 'SUSPENDED' | 'DEACTIVATED' | 'REJECTED';
   registrationDate?: string;
   lastActivityAt?: string;
   identityVerified?: boolean;

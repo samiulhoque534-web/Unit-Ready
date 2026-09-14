@@ -23,146 +23,7 @@ import {
   RankTradeDistributionItem
 } from '../types';
 
-export const initialUsers: User[] = [
-  {
-    id: 'usr-co',
-    serviceNumber: 'BA-5421',
-    rank: 'Lt Col',
-    fullName: 'Lt Col Tariqul Anam',
-    appointmentTitle: 'Commanding Officer (CO)',
-    role: 'co',
-    sectionAssigned: 'all',
-    failedLoginAttempts: 0,
-    isActive: true,
-    userStatus: 'ACTIVE',
-    loginCode: '951001',
-    pin: '951001'
-  },
-  {
-    id: 'usr-2ic',
-    serviceNumber: 'BA-6789',
-    rank: 'Maj',
-    fullName: 'Maj Mahmudur Rahman',
-    appointmentTitle: 'Second-in-Command (2IC)',
-    role: '2ic',
-    sectionAssigned: 'all',
-    failedLoginAttempts: 0,
-    isActive: true,
-    userStatus: 'ACTIVE',
-    loginCode: '952002',
-    pin: '952002'
-  },
-  {
-    id: 'usr-qm',
-    serviceNumber: 'BA-7812',
-    rank: 'Maj',
-    fullName: 'Maj Asaduzzaman',
-    appointmentTitle: 'Quartermaster (QM)',
-    role: 'qm',
-    sectionAssigned: 'all',
-    failedLoginAttempts: 0,
-    isActive: true,
-    userStatus: 'ACTIVE',
-    loginCode: '954004',
-    pin: '954004'
-  },
-  {
-    id: 'usr-moic',
-    serviceNumber: 'BA-8923',
-    rank: 'Maj',
-    fullName: 'Maj Dr. Farhana Yesmin',
-    appointmentTitle: 'Medical Officer In-Charge (MOIC)',
-    role: 'moic',
-    sectionAssigned: 'Med',
-    failedLoginAttempts: 0,
-    isActive: true,
-    userStatus: 'ACTIVE',
-    loginCode: '953003',
-    pin: '953003'
-  },
-  {
-    id: 'usr-op-med',
-    serviceNumber: 'NO-40673',
-    rank: 'WO',
-    fullName: 'WO Md. Mizanur Rahman',
-    appointmentTitle: 'Medicine Operator',
-    role: 'medicine_operator',
-    sectionAssigned: 'Med',
-    failedLoginAttempts: 0,
-    isActive: true,
-    userStatus: 'ACTIVE',
-    loginCode: '955005',
-    pin: '955005'
-  },
-  {
-    id: 'usr-op-vehicle',
-    serviceNumber: 'NO-30582',
-    rank: 'Sgt',
-    fullName: 'Sgt Kazi Nazmul',
-    appointmentTitle: 'Vehicle Operator',
-    role: 'vehicle_operator',
-    sectionAssigned: 'MT',
-    failedLoginAttempts: 0,
-    isActive: true,
-    userStatus: 'ACTIVE',
-    loginCode: '956006',
-    pin: '956006'
-  },
-  {
-    id: 'usr-op-manpower',
-    serviceNumber: 'NO-20491',
-    rank: 'Sgt',
-    fullName: 'Sgt Md. Rafiqul Islam',
-    appointmentTitle: 'Manpower Operator',
-    role: 'manpower_operator',
-    sectionAssigned: 'all',
-    failedLoginAttempts: 0,
-    isActive: true,
-    userStatus: 'ACTIVE',
-    loginCode: '957007',
-    pin: '957007'
-  },
-  {
-    id: 'usr-op-duty',
-    serviceNumber: 'NO-10293',
-    rank: 'Cpl',
-    fullName: 'Cpl Shahidul Alam',
-    appointmentTitle: 'Part-I Duty Roster Operator',
-    role: 'duty_operator',
-    sectionAssigned: 'all',
-    failedLoginAttempts: 0,
-    isActive: true,
-    userStatus: 'ACTIVE',
-    loginCode: '958008',
-    pin: '958008'
-  },
-  {
-    id: 'usr-op-inst',
-    serviceNumber: 'NO-50764',
-    rank: 'Sgt',
-    fullName: 'Sgt Jahangir Alam',
-    appointmentTitle: 'Instrument & Equipment Operator',
-    role: 'inst_equip_operator',
-    sectionAssigned: 'Med',
-    failedLoginAttempts: 0,
-    isActive: true,
-    userStatus: 'ACTIVE',
-    loginCode: '959009',
-    pin: '959009'
-  },
-  {
-    id: 'usr-viewer',
-    serviceNumber: 'GEN-VIEW',
-    rank: 'Viewer',
-    fullName: 'Unit Personnel (General)',
-    appointmentTitle: 'General Viewer (Read-Only)',
-    role: 'general_viewer',
-    sectionAssigned: 'all',
-    failedLoginAttempts: 0,
-    isActive: true,
-    userStatus: 'ACTIVE'
-  }
-];
+export const initialUsers: User[] = [];
 
 export const initialDevices: Device[] = [
   {
@@ -170,11 +31,7 @@ export const initialDevices: Device[] = [
     deviceIdentifier: 'DESKTOP-95FA-HQ-MAIN-01',
     deviceName: 'HQ Command Main Workstation',
     deviceType: 'desktop',
-    assignedUserId: 'usr-co',
     assignedSectionCode: 'all',
-    sixDigitPin: '954321',
-    pinExpiresAt: '2026-12-31T23:59:59Z',
-    generatedByAppointment: 'Commanding Officer (CO)',
     status: 'ACTIVE',
     registrationDate: '2026-01-01T00:00:00Z',
     revokedStatus: false
@@ -184,11 +41,7 @@ export const initialDevices: Device[] = [
     deviceIdentifier: 'TABLET-95FA-MED-FIELD-02',
     deviceName: 'Medical Store Rugged Field Tablet',
     deviceType: 'tablet',
-    assignedUserId: 'usr-op-med',
     assignedSectionCode: 'Med',
-    sixDigitPin: '821904',
-    pinExpiresAt: '2026-12-31T23:59:59Z',
-    generatedByAppointment: 'Commanding Officer (CO)',
     status: 'ACTIVE',
     registrationDate: '2026-01-01T00:00:00Z',
     revokedStatus: false

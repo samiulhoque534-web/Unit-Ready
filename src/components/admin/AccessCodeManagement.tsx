@@ -104,7 +104,8 @@ export const AccessCodeManagement: React.FC = () => {
   };
 
   const handleCopyCode = (user: User) => {
-    const code = user.loginCode || user.pin || '951001';
+    const code = user.loginCode || user.pin || '';
+    if (!code) return;
     navigator.clipboard.writeText(code);
     setCopiedId(user.id);
     setTimeout(() => setCopiedId(null), 2500);
@@ -291,7 +292,7 @@ export const AccessCodeManagement: React.FC = () => {
               ) : (
                 filteredUsers.map((u) => {
                   const isActive = u.isActive !== false && u.userStatus !== 'DEACTIVATED';
-                  const code = u.loginCode || u.pin || '951001';
+                  const code = u.loginCode || u.pin || '—';
                   const isVisible = showCodes[u.id];
                   const isCopied = copiedId === u.id;
 
@@ -534,7 +535,7 @@ export const AccessCodeManagement: React.FC = () => {
                 type="text"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="e.g. Md. Tariqul Islam"
+                placeholder="Enter personnel full name"
                 className="w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white font-semibold"
                 required
               />
@@ -684,7 +685,7 @@ export const AccessCodeManagement: React.FC = () => {
                   Your Secret Individual 6-Digit Access Code
                 </p>
                 <div className="text-3xl font-black font-mono tracking-widest text-[#2D4A22] dark:text-amber-400">
-                  {printUser.loginCode || printUser.pin || '951001'}
+                  {printUser.loginCode || printUser.pin || '—'}
                 </div>
               </div>
 
@@ -699,8 +700,11 @@ export const AccessCodeManagement: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  navigator.clipboard.writeText(printUser.loginCode || printUser.pin || '951001');
-                  alert('Access Code copied to clipboard!');
+                  const c = printUser.loginCode || printUser.pin || '';
+                  if (c) {
+                    navigator.clipboard.writeText(c);
+                    alert('Access Code copied to clipboard!');
+                  }
                 }}
                 className="px-4 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold flex items-center gap-1.5 hover:bg-slate-200 transition cursor-pointer"
               >
