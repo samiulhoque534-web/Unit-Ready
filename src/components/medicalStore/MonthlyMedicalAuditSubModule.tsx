@@ -3,6 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { db } from '../../db/database';
 import { MonthlyMedicalAuditReport, MonthlyMedicalAuditItem, AuditSignatureBlock } from '../../types';
+import { syncEntityToCloud } from '../../services/firebaseSyncService';
 import { Modal } from '../common/Modal';
 import { StatusBadge } from '../common/StatusBadge';
 import { RequestCorrectionModal } from '../common/RequestCorrectionModal';
@@ -172,6 +173,7 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
     };
 
     await db.monthlyMedicalAudits.put(newAudit);
+    syncEntityToCloud('monthlyMedicalAudits', newAudit);
     await logAuditEvent(
       currentUser,
       'MONTHLY_AUDIT_SAVED',
@@ -212,6 +214,7 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
     };
 
     await db.monthlyMedicalAudits.put(updated);
+    syncEntityToCloud('monthlyMedicalAudits', updated);
     await logAuditEvent(
       currentUser,
       'RECORD_SUBMITTED',
@@ -262,6 +265,7 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
     };
 
     await db.monthlyMedicalAudits.put(updated);
+    syncEntityToCloud('monthlyMedicalAudits', updated);
     await logAuditEvent(
       currentUser,
       'MOIC_APPROVED',
@@ -318,6 +322,7 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
     };
 
     await db.monthlyMedicalAudits.put(updated);
+    syncEntityToCloud('monthlyMedicalAudits', updated);
     await logAuditEvent(
       currentUser,
       'CO_APPROVED',
@@ -383,6 +388,7 @@ export const MonthlyMedicalAuditSubModule: React.FC = () => {
     };
 
     await db.monthlyMedicalAudits.put(updated);
+    syncEntityToCloud('monthlyMedicalAudits', updated);
     await logAuditEvent(
       currentUser,
       'RECORD_MODIFIED',

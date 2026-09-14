@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../db/database';
 import { User, UserAuditLogEntry, ManpowerPersonnel } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { syncEntityToCloud } from '../../services/firebaseSyncService';
 import {
   Users,
   ShieldCheck,
@@ -204,6 +205,13 @@ export const UserMonitoringModule: React.FC = () => {
       if (db.userAuditLogs) {
         await db.userAuditLogs.add(newLog);
       }
+
+      // Realtime Cloud Sync
+      const updatedUser = await db.users.get(user.id);
+      if (updatedUser) {
+        syncEntityToCloud('users', updatedUser);
+      }
+      syncEntityToCloud('userAuditLogs', newLog);
 
       setActionUser(null);
       setActionReason('');
